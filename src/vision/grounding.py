@@ -109,6 +109,14 @@ class VisionGrounder:
                 screen_size=(screenshot.width, screenshot.height),
             )
             if not candidate or candidate.confidence <= 0:
+                fallback = self._fallback_candidate_from_region(region)
+                if self._verify_candidate(target, screenshot, fallback):
+                    candidates.append(fallback)
+                    logger.info(
+                        "Using verified heuristic candidate from region at (%d, %d)",
+                        fallback.x,
+                        fallback.y,
+                    )
                 continue
 
             save_debug_crop(cropped, "2", i, f"precise_{candidate.x}_{candidate.y}")
@@ -158,6 +166,16 @@ class VisionGrounder:
         )
 
         if not candidate or candidate.confidence < 0.5:
+            fallback = Candidate(
+                x=cx,
+                y=cy,
+                confidence=0.55,
+                label="cached_position",
+                region_bbox=bbox,
+            )
+            if self._verify_candidate(target, screenshot, fallback):
+                self._last_region_bbox = bbox
+                return (cx, cy)
             raise GroundingError("Precise re-ground: low confidence or not found")
 
         if not self._verify_candidate(target, screenshot, candidate):
@@ -265,6 +283,23 @@ class VisionGrounder:
         return bool(is_match)
 
                              
+
+    @staticmethod
+    def _fallback_candidate_from_region(region: Region) -> Candidate:
+        width = region.x2 - region.x1
+        height = region.y2 - region.y1
+
+        x = region.x1 + (width // 2)
+        y_offset = max(12, min(height // 3, 48))
+        y = min(region.y2 - 1, region.y1 + y_offset)
+
+        return Candidate(
+            x=x,
+            y=y,
+            confidence=max(0.35, region.confidence * 0.6),
+            label="heuristic_region_center",
+            region_bbox=(region.x1, region.y1, region.x2, region.y2),
+        )
 
     def _select_best_candidate(self, target: str, candidates: list[Candidate]) -> Candidate:
                                                                           
