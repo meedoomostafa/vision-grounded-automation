@@ -6,7 +6,7 @@ Save As handling uses absolute path injection — no UI directory navigation.
 import time
 
 from src import config
-from src.automation.desktop import double_click, hotkey, press, type_text
+from src.automation.desktop import hotkey, press, type_text
 from src.automation.window import (
     activate_window,
     close_window,
@@ -15,8 +15,6 @@ from src.automation.window import (
 )
 from src.core.exceptions import WindowNotFoundError
 from src.core.logger import get_logger
-from src.vision.grounding import VisionGrounder
-from src.vision.screenshot import capture_screen
 
 logger = get_logger(__name__)
 
@@ -25,32 +23,6 @@ def ensure_output_directory() -> None:
     """Create the output directory if it doesn't exist."""
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("Output directory ready: %s", config.OUTPUT_DIR)
-
-
-def launch_notepad(grounder: VisionGrounder) -> tuple[int, int]:
-    """Ground Notepad icon on desktop, double-click to launch, verify window.
-
-    Returns:
-        The (x, y) coordinates where the icon was found.
-
-    Raises:
-        WindowNotFoundError: If Notepad window doesn't appear after clicking.
-    """
-    screenshot = capture_screen()
-    coords = grounder.ground("Notepad", screenshot)
-    x, y = coords
-
-    logger.info("Launching Notepad via double-click at (%d, %d)", x, y)
-    double_click(x, y)
-
-    if not wait_for_window("Notepad", timeout=config.WINDOW_TIMEOUT):
-        raise WindowNotFoundError("Notepad window did not appear after double-click")
-
-    # Bring to foreground
-    activate_window("Notepad")
-    time.sleep(config.SETTLE_DELAY)
-
-    return coords
 
 
 def write_post(post: dict) -> None:

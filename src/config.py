@@ -14,14 +14,8 @@ DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 VISUAL_DEBUG: bool = os.getenv("VISUAL_DEBUG", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
-# Screen
-SCREEN_WIDTH: int = 1920
-SCREEN_HEIGHT: int = 1080
-
-# Grounding
 MAX_RETRIES: int = 3
 BACKOFF_BASE: float = 2.0
-MAX_SEARCH_DEPTH: int = 3
 PRECISE_CROP_SIZE: int = 400
 
 # Paths — all pathlib, all dynamic

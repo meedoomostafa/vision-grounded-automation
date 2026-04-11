@@ -9,6 +9,16 @@ logger = get_logger(__name__)
 
 _REQUIRED_FIELDS = {"id", "title", "body"}
 
+_FALLBACK_POSTS = [
+    {
+        "id": i,
+        "title": f"Offline Post {i}",
+        "body": f"This is fallback content for post {i},"
+        f" generated because the API was unreachable.",
+    }
+    for i in range(1, 11)
+]
+
 
 @retry(max_attempts=config.MAX_RETRIES, backoff_base=config.BACKOFF_BASE, exceptions=(APIError,))
 def _fetch_raw(url: str) -> list[dict]:
@@ -27,7 +37,7 @@ def fetch_posts(limit: int = config.API_POSTS_LIMIT) -> list[dict]:
     """Fetch blog posts from JSONPlaceholder API.
 
     Returns up to `limit` validated posts.
-    Returns empty list on total failure (graceful degradation).
+    Falls back to offline data when the API is unreachable.
     """
     url = f"{config.API_BASE_URL}/posts"
     logger.info("Fetching posts from %s (limit=%d)", url, limit)
@@ -36,13 +46,13 @@ def fetch_posts(limit: int = config.API_POSTS_LIMIT) -> list[dict]:
         data = _fetch_raw(url)
     except APIError as exc:
         logger.error("Failed to fetch posts after retries: %s", exc)
-        return []
+        logger.info("Using offline fallback posts")
+        return _FALLBACK_POSTS[:limit]
 
     if not isinstance(data, list):
         logger.error("Expected list from API, got %s", type(data).__name__)
-        return []
+        return _FALLBACK_POSTS[:limit]
 
-    # Validate and limit
     valid_posts = []
     for post in data[:limit]:
         if not isinstance(post, dict):
