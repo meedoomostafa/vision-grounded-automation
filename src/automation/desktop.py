@@ -1,4 +1,35 @@
+import sys
 import time
+
+# ---------------------------------------------------------------------------
+# Workaround: python-xlib 0.33 ships a randr extension that calls
+# Display.extension_add_subevent() and Display.extension_add_error(),
+# but neither method was included in the 0.33 release (fixed on upstream
+# master, unreleased).  Monkey-patch them before any X11-dependent import
+# (pyautogui/mouseinfo) triggers Display.__init__ → randr.init().
+# See: https://github.com/python-xlib/python-xlib/issues/262
+# ---------------------------------------------------------------------------
+if sys.platform == "linux":
+    from Xlib.display import Display as _XDisplay
+
+    if not hasattr(_XDisplay, "extension_add_subevent"):
+
+        def _extension_add_subevent(self, code, subcode, evt, name=None):
+            newevt = type(evt.__name__, evt.__bases__, evt.__dict__.copy())
+            newevt._code = code
+            self.display.add_extension_event(code, newevt, subcode)
+            if name is None:
+                name = evt.__name__
+            setattr(self.extension_event, name, (code, subcode))
+
+        _XDisplay.extension_add_subevent = _extension_add_subevent
+
+    if not hasattr(_XDisplay, "extension_add_error"):
+
+        def _extension_add_error(self, code, err):
+            self.display.add_extension_error(code, err)
+
+        _XDisplay.extension_add_error = _extension_add_error
 
 import pyautogui
 
