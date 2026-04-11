@@ -1,5 +1,5 @@
-from PIL import Image
 import mss
+from PIL import Image
 
 from src.core.logger import get_logger
 
@@ -49,5 +49,8 @@ def crop_region(image: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Im
     y2 = max(y1 + 1, min(y2, h))
 
     cropped = image.crop((x1, y1, x2, y2))
-    logger.debug("Cropped region (%d,%d,%d,%d) → %dx%d", x1, y1, x2, y2, cropped.width, cropped.height)
+    logger.debug(
+        "Cropped region (%d,%d,%d,%d) → %dx%d",
+        x1, y1, x2, y2, cropped.width, cropped.height,
+    )
     return cropped
