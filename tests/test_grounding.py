@@ -47,7 +47,7 @@ def test_select_best_exact_label_match():
         Candidate(x=100, y=100, confidence=0.99, label="Notepad++", region_bbox=(0, 0, 200, 200)),
         Candidate(x=300, y=300, confidence=0.85, label="Notepad", region_bbox=(200, 200, 400, 400)),
     ]
-    best = grounder._select_best_candidate(candidates)
+    best = grounder._select_best_candidate("Notepad", candidates)
     # Should prefer exact "Notepad" match over higher-confidence "Notepad++"
     assert best.label == "Notepad"
     assert best.x == 300
@@ -62,8 +62,31 @@ def test_select_best_highest_confidence_when_no_exact_match():
             label="text editor", region_bbox=(200, 200, 400, 400),
         ),
     ]
-    best = grounder._select_best_candidate(candidates)
+    best = grounder._select_best_candidate("Notepad", candidates)
     assert best.confidence == 0.9
+
+
+def test_select_best_uses_requested_target_not_hardcoded_notepad():
+    grounder = VisionGrounder()
+    candidates = [
+        Candidate(
+            x=100,
+            y=100,
+            confidence=0.98,
+            label="Calculator+",
+            region_bbox=(0, 0, 200, 200),
+        ),
+        Candidate(
+            x=300,
+            y=300,
+            confidence=0.7,
+            label="Calculator",
+            region_bbox=(200, 200, 400, 400),
+        ),
+    ]
+    best = grounder._select_best_candidate("Calculator", candidates)
+    assert best.label == "Calculator"
+    assert best.x == 300
 
 
 # -- Stateful grounding tests --

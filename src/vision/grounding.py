@@ -27,7 +27,7 @@ from src.core.exceptions import GroundingError, IconNotFoundError
 from src.core.logger import get_logger
 from src.core.retry import retry
 from src.vision import prompts
-from src.vision.annotator import save_debug_crop
+from src.vision.annotator import annotate_detection, save_debug_crop
 from src.vision.screenshot import crop_region
 
 logger = get_logger(__name__)
@@ -151,7 +151,7 @@ class VisionGrounder:
         if not candidates:
             raise IconNotFoundError(f"'{target}' not found after searching all regions")
 
-        best = self._select_best_candidate(candidates)
+        best = self._select_best_candidate(target, candidates)
 
         # Cache for stateful re-grounding
         self._last_known_coords = (best.x, best.y)
@@ -190,6 +190,7 @@ class VisionGrounder:
             raise GroundingError("Precise re-ground: verification failed")
 
         self._last_known_coords = (candidate.x, candidate.y)
+        self._last_region_bbox = bbox
         return (candidate.x, candidate.y)
 
     # -- Phase implementations --
@@ -209,10 +210,10 @@ class VisionGrounder:
         for r in raw_regions:
             try:
                 region = Region(
-                    x1=int(r["x1"]),
-                    y1=int(r["y1"]),
-                    x2=int(r["x2"]),
-                    y2=int(r["y2"]),
+                    x1=max(0, min(int(r["x1"]), screenshot.width - 1)),
+                    y1=max(0, min(int(r["y1"]), screenshot.height - 1)),
+                    x2=max(1, min(int(r["x2"]), screenshot.width)),
+                    y2=max(1, min(int(r["y2"]), screenshot.height)),
                     confidence=float(r.get("confidence", 0.5)),
                     reasoning=r.get("reasoning", ""),
                 )
@@ -267,13 +268,20 @@ class VisionGrounder:
         self, target: str, screenshot: Image.Image, candidate: Candidate
     ) -> bool:
         """Phase 3: Ask MLLM to confirm the detection is correct."""
+        marked = annotate_detection(
+            screenshot,
+            (candidate.x, candidate.y),
+            label=f"Candidate: {target}",
+        )
+        save_debug_crop(marked, "3", 0, f"verify_{candidate.x}_{candidate.y}")
+
         prompt = prompts.VERIFICATION.format(
             det_x=candidate.x,
             det_y=candidate.y,
             target=target,
         )
 
-        data = self._query_mllm(prompt, screenshot)
+        data = self._query_mllm(prompt, marked)
 
         is_match = data.get("is_match", False)
         reasoning = data.get("reasoning", "")
@@ -287,13 +295,14 @@ class VisionGrounder:
 
     # -- Candidate scoring --
 
-    def _select_best_candidate(self, candidates: list[Candidate]) -> Candidate:
+    def _select_best_candidate(self, target: str, candidates: list[Candidate]) -> Candidate:
         """Pick the best match from verified candidates.
 
         Prioritizes exact label match, then highest confidence.
         """
         # Prefer candidates whose label exactly matches (case-insensitive)
-        exact_matches = [c for c in candidates if c.label.strip().lower() == "notepad"]
+        target_lower = target.strip().lower()
+        exact_matches = [c for c in candidates if c.label.strip().lower() == target_lower]
         pool = exact_matches if exact_matches else candidates
 
         return max(pool, key=lambda c: c.confidence)
