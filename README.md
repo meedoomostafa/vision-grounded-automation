@@ -61,7 +61,36 @@ This reduces API calls from ~30 per run to ~14.
 
 ## Setup
 
-### Prerequisites
+### 🚀 Quick Start for Windows Users (No Installation Required)
+
+Want to get up and running instantly without installing Python manually? Open **PowerShell** as Administrator and run this one-liner:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/medomostafa/DesktopAutomation/main/install.ps1 | iex
+```
+
+This script will automatically install `uv`, download the code, set up the environment, and run the app. Make sure to edit the generated `.env` file to include your API key when prompted!
+
+---
+
+### 📦 Generating a Windows `.exe`
+
+If you want to package the app into a single `DesktopAutomation.exe` file so you can move it around easily:
+
+#### Option A: Build on Windows (Recommended)
+1. Run `uv sync` on your Windows machine to install dependencies.
+2. Run `uv run build_exe.py`
+3. Find your executable in the `dist/` folder! Put a `.env` file next to it before running.
+
+#### Option B: Cross-compile on Linux (Using Docker)
+If you are on Linux and want to build the Windows `.exe` right here, we provide a Docker script that uses Wine to cross-compile it for you.
+1. Make sure Docker is installed and running.
+2. Run `./build_docker.sh`
+3. The script will pull the `tobix/pywine` image, build the `.exe`, and place it in the `dist/` folder.
+
+---
+
+### Manual Setup (For Development)
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager
 - Windows 10/11 at 1920×1080 resolution
