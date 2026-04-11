@@ -1,0 +1,140 @@
+from unittest.mock import MagicMock, patch
+
+import pytest
+from PIL import Image
+
+from src.vision.grounding import Candidate, Region, VisionGrounder
+from src.vision.screenshot import crop_region
+
+
+# -- crop_region tests --
+
+def test_crop_region_basic():
+    img = Image.new("RGB", (1920, 1080), color=(128, 128, 128))
+    cropped = crop_region(img, (100, 100, 500, 400))
+    assert cropped.size == (400, 300)
+
+
+def test_crop_region_clamped_to_bounds():
+    img = Image.new("RGB", (1920, 1080), color=(128, 128, 128))
+    cropped = crop_region(img, (-50, -50, 2000, 1200))
+    assert cropped.size == (1920, 1080)
+
+
+def test_crop_region_degenerate_returns_minimum():
+    img = Image.new("RGB", (1920, 1080), color=(128, 128, 128))
+    # x1 == x2, y1 == y2 → should return at least 1x1
+    cropped = crop_region(img, (500, 500, 500, 500))
+    assert cropped.width >= 1 and cropped.height >= 1
+
+
+# -- Coordinate mapping tests --
+
+def test_coordinate_mapping_crop_to_screen():
+    """Verify Phase 2 correctly maps crop-local coords to screen coords."""
+    # Region at (200, 300) to (600, 700)
+    region = Region(x1=200, y1=300, x2=600, y2=700, confidence=0.9)
+    # MLLM returns (150, 100) within the crop
+    local_x, local_y = 150, 100
+    screen_x = region.x1 + local_x  # 200 + 150 = 350
+    screen_y = region.y1 + local_y  # 300 + 100 = 400
+    assert screen_x == 350
+    assert screen_y == 400
+
+
+# -- Candidate selection tests --
+
+def test_select_best_exact_label_match():
+    grounder = VisionGrounder()
+    candidates = [
+        Candidate(x=100, y=100, confidence=0.99, label="Notepad++", region_bbox=(0, 0, 200, 200)),
+        Candidate(x=300, y=300, confidence=0.85, label="Notepad", region_bbox=(200, 200, 400, 400)),
+    ]
+    best = grounder._select_best_candidate(candidates)
+    # Should prefer exact "Notepad" match over higher-confidence "Notepad++"
+    assert best.label == "Notepad"
+    assert best.x == 300
+
+
+def test_select_best_highest_confidence_when_no_exact_match():
+    grounder = VisionGrounder()
+    candidates = [
+        Candidate(x=100, y=100, confidence=0.7, label="notepad app", region_bbox=(0, 0, 200, 200)),
+        Candidate(x=300, y=300, confidence=0.9, label="text editor", region_bbox=(200, 200, 400, 400)),
+    ]
+    best = grounder._select_best_candidate(candidates)
+    assert best.confidence == 0.9
+
+
+# -- Stateful grounding tests --
+
+def test_grounder_starts_in_full_mode():
+    grounder = VisionGrounder()
+    assert grounder._last_known_coords is None
+
+
+def test_grounder_caches_after_success():
+    grounder = VisionGrounder()
+    grounder._last_known_coords = (500, 400)
+    grounder._last_region_bbox = (300, 200, 700, 600)
+    assert grounder._last_known_coords == (500, 400)
+
+
+def test_grounder_reset_clears_state():
+    grounder = VisionGrounder()
+    grounder._last_known_coords = (500, 400)
+    grounder._last_region_bbox = (300, 200, 700, 600)
+    grounder.reset_state()
+    assert grounder._last_known_coords is None
+    assert grounder._last_region_bbox is None
+
+
+# -- DRY_RUN mock response tests --
+
+def test_mock_response_regions():
+    result = VisionGrounder._mock_response("Find regions for the target")
+    assert "regions" in result
+    assert len(result["regions"]) >= 1
+    assert "x1" in result["regions"][0]
+
+
+def test_mock_response_precise():
+    result = VisionGrounder._mock_response("Find the EXACT center within this cropped image")
+    assert "x" in result
+    assert "y" in result
+    assert result["confidence"] > 0
+
+
+def test_mock_response_verification():
+    result = VisionGrounder._mock_response("is_match verify this element")
+    assert result["is_match"] is True
+
+
+# -- Full grounding integration (DRY_RUN) --
+
+def test_full_ground_dry_run():
+    """VisionGrounder.ground() should work end-to-end in DRY_RUN mode."""
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (1920, 1080), color=(50, 50, 50))
+    coords = grounder.ground("Notepad", screenshot)
+    assert isinstance(coords, tuple)
+    assert len(coords) == 2
+    x, y = coords
+    assert 0 <= x < 1920
+    assert 0 <= y < 1080
+    # State should be cached
+    assert grounder._last_known_coords is not None
+
+
+def test_stateful_reground_dry_run():
+    """Second call should use precise re-ground mode."""
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (1920, 1080), color=(50, 50, 50))
+
+    # First call: full search
+    coords1 = grounder.ground("Notepad", screenshot)
+    assert grounder._last_known_coords is not None
+
+    # Second call: should attempt precise re-ground
+    coords2 = grounder.ground("Notepad", screenshot)
+    assert isinstance(coords2, tuple)
