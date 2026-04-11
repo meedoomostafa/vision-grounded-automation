@@ -61,7 +61,7 @@ This reduces API calls from ~30 per run to ~14.
 
 ## Setup
 
-### 🚀 Quick Start for Windows Users (No Installation Required)
+### Quick Start for Windows Users (No Installation Required)
 
 Want to get up and running instantly without installing Python manually? Open **PowerShell** as Administrator and run this one-liner:
 
@@ -73,7 +73,7 @@ This script will automatically install `uv`, download the code, set up the envir
 
 ---
 
-### 📦 Generating a Windows `.exe`
+### Generating a Windows `.exe`
 
 If you want to package the app into a single `DesktopAutomation.exe` file so you can move it around easily:
 
