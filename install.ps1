@@ -21,17 +21,22 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 # 3. Clone repo
-if (-not (Test-Path "DesktopAutomation")) {
+if (-not (Test-Path "vision-grounded-automation")) {
     Write-Host "Cloning repository..." -ForegroundColor Yellow
-    git clone https://github.com/medomostafa/DesktopAutomation.git
+    git clone https://github.com/meedoomostafa/vision-grounded-automation.git
 } else {
-    Write-Host "Directory 'DesktopAutomation' already exists. Updating..." -ForegroundColor Yellow
-    Set-Location DesktopAutomation
+    Write-Host "Directory already exists. Updating..." -ForegroundColor Yellow
+    Set-Location vision-grounded-automation
     git pull
     Set-Location ..
 }
 
-Set-Location DesktopAutomation
+if (-not (Test-Path "vision-grounded-automation")) {
+    Write-Host "Clone failed! Check your internet connection." -ForegroundColor Red
+    exit
+}
+
+Set-Location vision-grounded-automation
 
 # 4. Create .env
 if (-not (Test-Path ".env")) {
