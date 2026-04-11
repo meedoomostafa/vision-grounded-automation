@@ -114,8 +114,8 @@ def _recover(grounder: VisionGrounder) -> None:
 
 
 def _build_regions_for_annotation(grounder: VisionGrounder) -> list[dict] | None:
-    if grounder._last_region_bbox:
-        bbox = grounder._last_region_bbox
+    bbox = grounder.last_region_bbox
+    if bbox:
         return [{"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3], "confidence": 1.0}]
     return None
 

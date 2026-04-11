@@ -78,6 +78,10 @@ class VisionGrounder:
         self._last_region_bbox = None
         logger.debug("Grounding state reset")
 
+    @property
+    def last_region_bbox(self) -> tuple[int, int, int, int] | None:
+        return self._last_region_bbox
+
                                                   
 
     def _full_cascaded_search(
@@ -98,7 +102,10 @@ class VisionGrounder:
             cropped = crop_region(screenshot, bbox)
             save_debug_crop(cropped, "1", i, f"region_{region.confidence:.0%}")
 
-            candidate = self._locate_in_region(target, cropped, region)
+            candidate = self._locate_in_region(
+                target, cropped, region,
+                screen_size=(screenshot.width, screenshot.height),
+            )
             if not candidate or candidate.confidence <= 0:
                 continue
 
@@ -135,15 +142,18 @@ class VisionGrounder:
         bbox = (
             max(0, cx - half),
             max(0, cy - half),
-            min(config.SCREEN_WIDTH, cx + half),
-            min(config.SCREEN_HEIGHT, cy + half),
+            min(screenshot.width, cx + half),
+            min(screenshot.height, cy + half),
         )
 
         cropped = crop_region(screenshot, bbox)
         save_debug_crop(cropped, "P", 0, "precise_crop")
 
         region = Region(x1=bbox[0], y1=bbox[1], x2=bbox[2], y2=bbox[3], confidence=1.0)
-        candidate = self._locate_in_region(target, cropped, region)
+        candidate = self._locate_in_region(
+            target, cropped, region,
+            screen_size=(screenshot.width, screenshot.height),
+        )
 
         if not candidate or candidate.confidence < 0.5:
             raise GroundingError("Precise re-ground: low confidence or not found")
@@ -186,7 +196,8 @@ class VisionGrounder:
         return regions
 
     def _locate_in_region(
-        self, target: str, cropped: Image.Image, region: Region
+        self, target: str, cropped: Image.Image, region: Region,
+        screen_size: tuple[int, int] = (1920, 1080),
     ) -> Candidate | None:
         prompt = prompts.PRECISE_LOCATION.format(
             crop_w=cropped.width,
@@ -208,13 +219,11 @@ class VisionGrounder:
         if local_x < 0 or local_y < 0 or label == "not_found":
             return None
 
-                                                         
         screen_x = region.x1 + local_x
         screen_y = region.y1 + local_y
 
-                         
-        screen_x = max(0, min(screen_x, config.SCREEN_WIDTH - 1))
-        screen_y = max(0, min(screen_y, config.SCREEN_HEIGHT - 1))
+        screen_x = max(0, min(screen_x, screen_size[0] - 1))
+        screen_y = max(0, min(screen_y, screen_size[1] - 1))
 
         return Candidate(
             x=screen_x,

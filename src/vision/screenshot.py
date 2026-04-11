@@ -1,12 +1,17 @@
 import mss
 from PIL import Image
 
+from src import config
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 def capture_screen(monitor_index: int = 1) -> Image.Image:
+    if config.DRY_RUN:
+        logger.debug("DRY_RUN: returning synthetic 1920x1080 screenshot")
+        return Image.new("RGB", (1920, 1080), color=(50, 50, 50))
+
     with mss.mss() as sct:
         monitors = sct.monitors
         if monitor_index >= len(monitors):
@@ -21,7 +26,10 @@ def capture_screen(monitor_index: int = 1) -> Image.Image:
         raw = sct.grab(monitor)
         image = Image.frombytes("RGB", (raw.width, raw.height), raw.rgb)
 
-    logger.debug("Captured screen: %dx%d from monitor %d", image.width, image.height, monitor_index)
+    logger.debug(
+        "Captured screen: %dx%d from monitor %d",
+        image.width, image.height, monitor_index,
+    )
     return image
 
 
