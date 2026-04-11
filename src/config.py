@@ -7,7 +7,7 @@ load_dotenv()
 
       
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-GEMINI_MODEL: str = "gemini-2.0-flash"
+GEMINI_MODEL: str = "gemini-2.5-flash"
 
                
 DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
