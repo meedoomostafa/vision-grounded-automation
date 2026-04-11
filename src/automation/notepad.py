@@ -19,6 +19,20 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _wait_for_saved_file(file_path, previous_mtime_ns: int | None) -> bool:
+    """Wait for the target file to appear or update on disk."""
+    deadline = time.time() + config.SAVE_DIALOG_TIMEOUT
+
+    while time.time() < deadline:
+        if file_path.exists():
+            current_mtime_ns = file_path.stat().st_mtime_ns
+            if previous_mtime_ns is None or current_mtime_ns != previous_mtime_ns:
+                return True
+        time.sleep(0.2)
+
+    return False
+
+
 def ensure_output_directory() -> None:
     """Create the output directory if it doesn't exist."""
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,6 +65,7 @@ def save_post(post_id: int) -> None:
     """
     file_path = config.OUTPUT_DIR / f"post_{post_id}.txt"
     absolute_path = str(file_path.resolve())
+    previous_mtime_ns = file_path.stat().st_mtime_ns if file_path.exists() else None
 
     logger.info("Saving post_%d to %s", post_id, absolute_path)
 
@@ -64,6 +79,8 @@ def save_post(post_id: int) -> None:
             raise WindowNotFoundError("Save As dialog did not appear")
 
     time.sleep(0.3)
+    activate_window("Save")
+    time.sleep(0.1)
 
     # Clear filename field and type absolute path
     hotkey("ctrl", "a")
@@ -84,7 +101,10 @@ def save_post(post_id: int) -> None:
     # Verify Save As dialog closed (save completed)
     time.sleep(0.3)
     if is_window_open("Save"):
-        logger.warning("Save dialog still open — possible save failure")
+        raise WindowNotFoundError("Save dialog is still open after save attempt")
+
+    if not _wait_for_saved_file(file_path, previous_mtime_ns):
+        raise WindowNotFoundError(f"Saved file was not written: {file_path}")
 
     logger.info("Post %d saved successfully", post_id)
 
