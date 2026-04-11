@@ -18,6 +18,12 @@ def setup_logging(level: str | None = None) -> None:
     root = logging.getLogger()
     root.setLevel(log_level)
 
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(log_level)
     console.setFormatter(logging.Formatter(_LOG_FORMAT, _DATE_FORMAT))
@@ -25,7 +31,7 @@ def setup_logging(level: str | None = None) -> None:
 
     log_dir = config.PROJECT_ROOT / "logs"
     log_dir.mkdir(exist_ok=True)
-    file_handler = logging.FileHandler(log_dir / "automation.log")
+    file_handler = logging.FileHandler(log_dir / "automation.log", encoding="utf-8")
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, _DATE_FORMAT))
     root.addHandler(file_handler)

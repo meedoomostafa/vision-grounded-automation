@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 
 from google import genai
@@ -50,6 +51,7 @@ class VisionGrounder:
         self._last_known_coords: tuple[int, int] | None = None
         self._last_region_bbox: tuple[int, int, int, int] | None = None
         self._search_count = 0
+        self._last_mllm_call_at = 0.0
 
     def ground(self, target: str, screenshot: Image.Image) -> tuple[int, int]:
         self._search_count += 1
@@ -274,6 +276,19 @@ class VisionGrounder:
 
                               
 
+    def _wait_for_mllm_slot(self) -> None:
+        if config.DRY_RUN or config.MLLM_MIN_INTERVAL_SECONDS <= 0:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._last_mllm_call_at
+        remaining = config.MLLM_MIN_INTERVAL_SECONDS - elapsed
+        if remaining > 0:
+            logger.info("Waiting %.1fs before next MLLM call to respect rate limits", remaining)
+            time.sleep(remaining)
+
+        self._last_mllm_call_at = time.monotonic()
+
     @retry(
         max_attempts=config.MAX_RETRIES,
         backoff_base=config.BACKOFF_BASE,
@@ -284,6 +299,7 @@ class VisionGrounder:
             return self._mock_response(prompt)
 
         try:
+            self._wait_for_mllm_slot()
             response = self._client.models.generate_content(
                 model=self._model,
                 contents=[prompt, image],

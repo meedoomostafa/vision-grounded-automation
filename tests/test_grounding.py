@@ -1,5 +1,6 @@
 from PIL import Image
 
+from src import config
 from src.vision.grounding import Candidate, Region, VisionGrounder
 from src.vision.screenshot import crop_region
 
@@ -157,3 +158,21 @@ def test_stateful_reground_dry_run():
                                                    
     coords2 = grounder.ground("Notepad", screenshot)
     assert isinstance(coords2, tuple)
+
+
+def test_wait_for_mllm_slot_respects_configured_interval(monkeypatch):
+    grounder = VisionGrounder()
+    grounder._last_mllm_call_at = 100.0
+
+    sleeps = []
+    monotonic_values = iter([105.0, 112.5])
+
+    monkeypatch.setattr(config, "DRY_RUN", False)
+    monkeypatch.setattr(config, "MLLM_MIN_INTERVAL_SECONDS", 12.5)
+    monkeypatch.setattr("src.vision.grounding.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("src.vision.grounding.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    grounder._wait_for_mllm_slot()
+
+    assert sleeps == [7.5]
+    assert grounder._last_mllm_call_at == 112.5
