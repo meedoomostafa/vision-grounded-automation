@@ -11,7 +11,8 @@ VISUAL CONTEXT — You must handle these variations:
 
 DISAMBIGUATION — Multiple similar icons may exist. You must:
 - Look for the standard Windows "{target}" shortcut (typically a small blue notepad icon)
-- REJECT distractors: "Notepad++" (green chameleon icon), "WordPad", "TextEdit", copies like "Notepad - Copy"
+- REJECT distractors: "Notepad++" (green chameleon icon), "WordPad",
+  "TextEdit", copies like "Notepad - Copy"
 - Match the EXACT text label "{target}" beneath the icon
 
 Return a JSON object with candidate regions that likely contain the "{target}" icon.
@@ -19,7 +20,8 @@ Each region should be a bounding box in the original screenshot pixel space.
 
 Format:
 {{"regions": [
-  {{"x1": int, "y1": int, "x2": int, "y2": int, "confidence": float, "reasoning": "why this region"}}
+  {{"x1": int, "y1": int, "x2": int, "y2": int,
+    "confidence": float, "reasoning": "why this region"}}
 ]}}
 
 Rules:

@@ -1,4 +1,3 @@
-import time
 from unittest.mock import patch
 
 from src.core.retry import retry
@@ -70,8 +69,6 @@ def test_retry_ignores_unexpected_exceptions():
 
 def test_retry_backoff_increases():
     delays = []
-
-    original_sleep = time.sleep
 
     def mock_sleep(duration):
         delays.append(duration)

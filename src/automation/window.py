@@ -15,7 +15,6 @@ def wait_for_window(title_contains: str, timeout: int | None = None) -> bool:
 
     timeout = timeout or config.WINDOW_TIMEOUT
     deadline = time.time() + timeout
-    search = title_contains.lower()
 
     while time.time() < deadline:
         windows = pywinctl.getWindowsWithTitle(title_contains)

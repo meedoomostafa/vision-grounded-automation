@@ -1,11 +1,7 @@
-from unittest.mock import MagicMock, patch
-
-import pytest
 from PIL import Image
 
 from src.vision.grounding import Candidate, Region, VisionGrounder
 from src.vision.screenshot import crop_region
-
 
                          
 
@@ -59,7 +55,10 @@ def test_select_best_highest_confidence_when_no_exact_match():
     grounder = VisionGrounder()
     candidates = [
         Candidate(x=100, y=100, confidence=0.7, label="notepad app", region_bbox=(0, 0, 200, 200)),
-        Candidate(x=300, y=300, confidence=0.9, label="text editor", region_bbox=(200, 200, 400, 400)),
+        Candidate(
+            x=300, y=300, confidence=0.9,
+            label="text editor", region_bbox=(200, 200, 400, 400),
+        ),
     ]
     best = grounder._select_best_candidate(candidates)
     assert best.confidence == 0.9
@@ -129,7 +128,7 @@ def test_stateful_reground_dry_run():
     screenshot = Image.new("RGB", (1920, 1080), color=(50, 50, 50))
 
                              
-    coords1 = grounder.ground("Notepad", screenshot)
+    grounder.ground("Notepad", screenshot)
     assert grounder._last_known_coords is not None
 
                                                    
