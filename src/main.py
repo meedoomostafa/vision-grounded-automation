@@ -17,7 +17,7 @@ import time
 
 from src import config
 from src.automation.api_client import fetch_posts
-from src.automation.desktop import double_click
+from src.automation.desktop import double_click, show_desktop
 from src.automation.notepad import (
     close_notepad,
     ensure_output_directory,
@@ -88,6 +88,8 @@ def main() -> None:
 
 def _process_single_post(grounder: VisionGrounder, post: dict, index: int) -> None:
     """Handle one post: ground → launch → type → save → close."""
+    show_desktop()
+
     # Fresh screenshot every iteration (spec requirement)
     screenshot = capture_screen()
 
@@ -127,6 +129,10 @@ def _recover(grounder: VisionGrounder) -> None:
     except Exception:
         pass
     grounder.reset_state()
+    try:
+        show_desktop()
+    except Exception:
+        pass
     time.sleep(config.SETTLE_DELAY)
 
 

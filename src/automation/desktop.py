@@ -116,3 +116,22 @@ def press(key: str) -> None:
         return
     gui = _require_pyautogui()
     gui.press(key)
+
+
+def show_desktop() -> None:
+    """Navigate to the desktop so icons are visible before grounding.
+
+    On Windows, ``Win+M`` is deterministic because it minimizes all windows
+    without toggling them back on the next call the way ``Win+D`` can.
+    """
+    if config.DRY_RUN:
+        logger.info("[DRY_RUN] show_desktop()")
+        return
+
+    gui = _require_pyautogui()
+    if sys.platform == "win32":
+        gui.hotkey("win", "m")
+    else:
+        gui.hotkey("win", "d")
+
+    time.sleep(config.SETTLE_DELAY)

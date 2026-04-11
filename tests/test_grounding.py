@@ -90,6 +90,14 @@ def test_select_best_uses_requested_target_not_hardcoded_notepad():
     assert best.x == 300
 
 
+def test_fallback_candidate_from_region_biases_toward_icon_area():
+    region = Region(x1=100, y1=200, x2=220, y2=380, confidence=0.9)
+    candidate = VisionGrounder._fallback_candidate_from_region(region)
+    assert candidate.x == 160
+    assert candidate.y == 248
+    assert candidate.region_bbox == (100, 200, 220, 380)
+
+
 # -- Stateful grounding tests --
 
 def test_grounder_starts_in_full_mode():
