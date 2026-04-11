@@ -43,7 +43,7 @@ if (-not (Test-Path ".env")) {
     Write-Host "Creating .env file..." -ForegroundColor Yellow
     Copy-Item ".env.example" ".env"
     Write-Host "`nIMPORTANT: I created a .env file for you." -ForegroundColor Magenta
-    Write-Host "Please open DesktopAutomation/.env and add your GOOGLE_API_KEY." -ForegroundColor Magenta
+    Write-Host "Please open vision-grounded-automation/.env and add your GOOGLE_API_KEY." -ForegroundColor Magenta
     Write-Host "Press any key when you are ready to continue..." -ForegroundColor Magenta
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }

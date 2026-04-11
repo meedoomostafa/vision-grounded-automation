@@ -66,7 +66,7 @@ This reduces API calls from ~30 per run to ~14.
 Want to get up and running instantly without installing Python manually? Open **PowerShell** as Administrator and run this one-liner:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/medomostafa/DesktopAutomation/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/meedoomostafa/vision-grounded-automation/main/install.ps1 | iex
 ```
 
 This script will automatically install `uv`, download the code, set up the environment, and run the app. Make sure to edit the generated `.env` file to include your API key when prompted!
