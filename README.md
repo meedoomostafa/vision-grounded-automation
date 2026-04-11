@@ -119,6 +119,7 @@ GOOGLE_API_KEY=your_gemini_api_key_here
 DRY_RUN=false          # true = log actions without executing
 VISUAL_DEBUG=false     # true = save intermediate crops to screenshots/debug/
 LOG_LEVEL=INFO
+MLLM_MIN_INTERVAL_SECONDS=12.5  # default pacing for Gemini free-tier quotas
 ```
 
 ---

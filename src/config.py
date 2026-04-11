@@ -66,6 +66,7 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 MAX_RETRIES: int = 3
 BACKOFF_BASE: float = 2.0
 PRECISE_CROP_SIZE: int = 400
+MLLM_MIN_INTERVAL_SECONDS: float = float(os.getenv("MLLM_MIN_INTERVAL_SECONDS", "12.5"))
 
 # Paths — all pathlib, all dynamic
 DESKTOP_DIR: Path = _resolve_desktop_dir()
