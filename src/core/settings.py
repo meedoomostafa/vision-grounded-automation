@@ -153,7 +153,7 @@ def load_settings(
         log_level=(env_map.get("LOG_LEVEL", "INFO").strip() or "INFO").upper(),
     )
     vision = VisionSettings(
-        model=env_map.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+        model=env_map.get("GEMINI_MODEL", "gemini-1.5-flash").strip() or "gemini-1.5-flash",
         api_keys=api_keys,
         key_manager=key_manager,
         max_retries=_parse_int(env_map.get("MAX_RETRIES"), default=3),
@@ -180,7 +180,7 @@ def load_settings(
     automation = AutomationSettings(
         api_base_url=env_map.get("API_BASE_URL", "https://jsonplaceholder.typicode.com").strip()
         or "https://jsonplaceholder.typicode.com",
-        api_posts_limit=_parse_int(env_map.get("API_POSTS_LIMIT"), default=10),
+        api_posts_limit=_parse_int(env_map.get("API_POSTS_LIMIT"), default=3),
         typing_interval=_parse_float(env_map.get("TYPING_INTERVAL"), default=0.02),
         settle_delay=_parse_float(env_map.get("SETTLE_DELAY"), default=1.0),
         window_timeout=_parse_int(env_map.get("WINDOW_TIMEOUT"), default=10),
