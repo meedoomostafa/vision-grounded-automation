@@ -16,3 +16,7 @@ class WindowNotFoundError(DesktopAutomationError):
 
 class APIError(DesktopAutomationError):
     """JSONPlaceholder API communication failures."""
+
+
+class SingletonLockError(DesktopAutomationError):
+    """Raised when another automation instance already holds the runtime lock."""
