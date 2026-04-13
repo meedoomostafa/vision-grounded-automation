@@ -85,16 +85,19 @@ If the "{target}" icon is NOT in this crop, return:
 VERIFICATION = """Look at this desktop screenshot. A UI element has been detected at
 position ({det_x}, {det_y}) - marked in the general area of the screen.
 
-QUESTION: Is the element at or very near that position the standard Windows
+QUESTION: Is the element AT EXACTLY that position the genuine, standard Windows
 "{target}" desktop shortcut icon?
 
-Consider:
-- The icon shape and appearance should match the Windows application "{target}"
-- The text label beneath it may be localized into the OS language instead of "{target}"
-- It should be a desktop shortcut, not a taskbar item or window button
+STRICT VERIFICATION RULES:
+- The icon shape and appearance MUST EXACTLY MATCH the Windows application "{target}".
+- The element MUST NOT be "Arc Raiders" or any other game, application, folder, or distractor.
+- The element MUST NOT be "Notepad++", "WordPad", or a document file.
+- It MUST be a desktop shortcut for the target application.
+- If the element at this position is a DIFFERENT icon or application, you MUST return is_match: false.
+- Do NOT return true if the element is only "near" the position but the position itself is empty or on a different icon.
 
 Return JSON:
-{{"is_match": true/false, "reasoning": "brief explanation"}}
+{{"is_match": true/false, "detected_label": "exact text visible under the icon", "confidence": float, "distractor_type": "none or name of distractor if not a match", "reasoning": "strict explanation of why this exact pixel coordinate is/isn't the target"}}
 """
 
 POPUP_RESOLUTION = """You are analyzing a Windows desktop screenshot after automation lost focus.

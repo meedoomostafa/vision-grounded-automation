@@ -3,7 +3,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from src import config
-from src.core.exceptions import GroundingError
+from src.core.exceptions import GroundingError, IconNotFoundError
 from src.core.key_manager import RoundRobinKeyManager
 from src.vision.grounding import Candidate, Region, VisionGrounder
 from src.vision.screenshot import crop_region
@@ -124,6 +124,21 @@ def test_grounder_reset_clears_state():
     assert grounder._last_region_bbox is None
 
 
+def test_snap_rejection_for_high_delta():
+    # Arrange an image where there's a cluster far away but within the crop bounding box
+    img = Image.new("RGB", (800, 600), color=(0, 0, 0))
+    # Draw a visible cluster starting at x=100+45, y=100+45, exceeding max_axis_delta=40
+    # The crop is ~ [-120:320]x[60:360], so (145, 145) is inside the crop bounds
+    import PIL.ImageDraw
+    draw = PIL.ImageDraw.Draw(img)
+    draw.rectangle([145, 145, 195, 195], fill=(255, 255, 255))
+    
+    snapped_x, snapped_y = VisionGrounder._snap_to_visual_cluster(img, 100, 100)
+    
+    assert snapped_x == 100
+    assert snapped_y == 100
+
+
 # -- DRY_RUN mock response tests --
 
 def test_mock_response_regions():
@@ -143,6 +158,25 @@ def test_mock_response_precise():
 def test_mock_response_verification():
     result = VisionGrounder._mock_response("is_match verify this element")
     assert result["is_match"] is True
+
+
+def test_strict_verification_failure(monkeypatch):
+    """If phase 3 verification is rigid and returns False, the candidate is rejected."""
+    grounder = VisionGrounder()
+    # Mock MLLM to always return high confidence in phases 1/2 but fail phase 3
+    def fake_query(prompt, image):
+        if "QUESTION: Is the element AT EXACTLY" in prompt:
+            return {"is_match": False, "reasoning": "This is a chameleon icon."}
+        elif "JSON object with candidate regions" in prompt:
+            return {"regions": [{"x1": 0, "y1": 0, "x2": 200, "y2": 200, "confidence": 0.9}]}
+        else:
+            return {"x": 100, "y": 100, "confidence": 0.95, "label": "Notepad++"}
+    
+    monkeypatch.setattr(grounder, "_query_mllm", fake_query)
+    
+    screenshot = Image.new("RGB", (1920, 1080), color=(50, 50, 50))
+    with pytest.raises(IconNotFoundError):
+        grounder.ground("Notepad", screenshot)
 
 
 # -- Full grounding integration (DRY_RUN) --
@@ -290,7 +324,7 @@ def test_snap_to_visual_cluster_refines_approximate_point():
     draw.rectangle((500, 340, 560, 410), fill=(235, 245, 255))
     draw.rectangle((520, 410, 555, 430), fill=(255, 255, 255))
 
-    snapped_x, snapped_y = VisionGrounder._snap_to_visual_cluster(image, 540, 220)
+    snapped_x, snapped_y = VisionGrounder._snap_to_visual_cluster(image, 540, 350)
 
     assert 520 <= snapped_x <= 540
     assert 350 <= snapped_y <= 390
