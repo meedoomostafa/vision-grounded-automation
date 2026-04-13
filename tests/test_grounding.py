@@ -1,7 +1,10 @@
 
-from PIL import Image
+import pytest
+from PIL import Image, ImageDraw
 
 from src import config
+from src.core.exceptions import GroundingError
+from src.core.key_manager import RoundRobinKeyManager
 from src.vision.grounding import Candidate, Region, VisionGrounder
 from src.vision.screenshot import crop_region
 
@@ -181,10 +184,113 @@ def test_wait_for_mllm_slot_respects_configured_interval(monkeypatch):
 
     monkeypatch.setattr(config, "DRY_RUN", False)
     monkeypatch.setattr(config, "MLLM_MIN_INTERVAL_SECONDS", 12.5)
+    monkeypatch.setattr(config, "GEMINI_API_KEYS", ("key-a",))
     monkeypatch.setattr("src.vision.grounding.time.monotonic", lambda: next(monotonic_values))
-    monkeypatch.setattr("src.vision.grounding.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "src.vision.grounding._RATE_LIMIT_EVENT.wait",
+        lambda seconds: sleeps.append(seconds),
+    )
 
     grounder._wait_for_mllm_slot()
 
     assert sleeps == [7.5]
     assert grounder._last_mllm_call_at == 112.5
+
+
+def test_precise_reground_can_skip_verification(monkeypatch):
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (1920, 1080), color=(10, 10, 10))
+    grounder._last_known_coords = (600, 400)
+
+    monkeypatch.setattr(config, "PRECISE_MIN_CONFIDENCE", 0.55)
+    monkeypatch.setattr(
+        grounder,
+        "_locate_in_region",
+        lambda *args, **kwargs: Candidate(
+            x=610,
+            y=410,
+            confidence=0.9,
+            label="Notepad",
+            region_bbox=(200, 100, 1000, 800),
+        ),
+    )
+    monkeypatch.setattr(
+        grounder,
+        "_verify_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("verify should be skipped")),
+    )
+
+    coords = grounder._precise_reground("Notepad", screenshot, verify=False)
+    assert coords == (610, 410)
+
+
+def test_precise_reground_verification_failure_raises(monkeypatch):
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (1920, 1080), color=(10, 10, 10))
+    grounder._last_known_coords = (600, 400)
+
+    monkeypatch.setattr(config, "PRECISE_MIN_CONFIDENCE", 0.55)
+    monkeypatch.setattr(
+        grounder,
+        "_locate_in_region",
+        lambda *args, **kwargs: Candidate(
+            x=610,
+            y=410,
+            confidence=0.9,
+            label="Notepad",
+            region_bbox=(200, 100, 1000, 800),
+        ),
+    )
+    monkeypatch.setattr(grounder, "_verify_candidate", lambda *args, **kwargs: False)
+
+    with pytest.raises(GroundingError):
+        grounder._precise_reground("Notepad", screenshot, verify=True)
+
+
+def test_query_mllm_budget_guard(monkeypatch):
+    grounder = VisionGrounder()
+
+    monkeypatch.setattr(config, "DRY_RUN", False)
+    monkeypatch.setattr(config, "MAX_MLLM_CALLS_PER_RUN", 1)
+    grounder._mllm_calls_used = 1
+
+    with pytest.raises(GroundingError, match="MLLM call budget exhausted"):
+        grounder._query_mllm("test", Image.new("RGB", (64, 64)))
+
+
+def test_get_client_rotates_across_configured_keys(monkeypatch):
+    created_keys = []
+
+    class FakeClient:
+        def __init__(self, api_key):
+            created_keys.append(api_key)
+
+    grounder = VisionGrounder()
+
+    monkeypatch.setattr(config, "DRY_RUN", False)
+    monkeypatch.setattr(
+        config,
+        "GEMINI_KEY_MANAGER",
+        RoundRobinKeyManager(["key-a", "key-b"]),
+    )
+    monkeypatch.setattr("src.vision.grounding.genai.Client", FakeClient)
+
+    first = grounder._get_client()
+    second = grounder._get_client()
+    third = grounder._get_client()
+
+    assert first is third
+    assert first is not second
+    assert created_keys == ["key-a", "key-b"]
+
+
+def test_snap_to_visual_cluster_refines_approximate_point():
+    image = Image.new("RGB", (800, 600), color=(30, 20, 60))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((500, 340, 560, 410), fill=(235, 245, 255))
+    draw.rectangle((520, 410, 555, 430), fill=(255, 255, 255))
+
+    snapped_x, snapped_y = VisionGrounder._snap_to_visual_cluster(image, 540, 220)
+
+    assert 520 <= snapped_x <= 540
+    assert 350 <= snapped_y <= 390

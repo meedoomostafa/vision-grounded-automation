@@ -1,10 +1,11 @@
 import functools
 import random
-import time
+from threading import Event
 
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
+_BACKOFF_EVENT = Event()
 
 
 def retry(max_attempts: int = 3, backoff_base: float = 2.0, exceptions: tuple = (Exception,)):
@@ -35,7 +36,7 @@ def retry(max_attempts: int = 3, backoff_base: float = 2.0, exceptions: tuple = 
                             exc,
                             delay,
                         )
-                        time.sleep(delay)
+                        _BACKOFF_EVENT.wait(delay)
                     else:
                         logger.error(
                             "All %d attempts for %s exhausted. Last error: %s",

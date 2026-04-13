@@ -70,6 +70,17 @@ def save_annotated(image: Image.Image, name: str) -> None:
     logger.info("Saved annotated screenshot: %s", path)
 
 
+def save_debug_image(image: Image.Image, name: str) -> None:
+    """Save a full debug image when VISUAL_DEBUG is enabled."""
+    if not config.VISUAL_DEBUG:
+        return
+
+    config.DEBUG_SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.DEBUG_SCREENSHOTS_DIR / f"{name}.png"
+    image.save(path)
+    logger.debug("Saved debug image: %s", path)
+
+
 def save_debug_crop(image: Image.Image, phase: str, step: int, label: str = "") -> None:
     """Save intermediate crop to debug directory when VISUAL_DEBUG is enabled."""
     if not config.VISUAL_DEBUG:

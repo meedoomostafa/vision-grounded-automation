@@ -36,6 +36,27 @@ Rules:
 - Make regions large enough to fully contain the icon and its label (at least 150x150 pixels)
 """
 
+FULLSCREEN_LOCATION = """You are analyzing a {width}x{height} pixel Windows desktop screenshot.
+
+TASK: Find the EXACT center (x, y) pixel coordinates of the desktop shortcut for
+the Windows application "{target}" in this full screenshot.
+
+VISUAL IDENTIFICATION:
+- The target is the desktop shortcut for the built-in Windows "{target}" app
+- On Windows 11, the icon typically looks like a small white/blue notepad page
+  or notebook with a blue accent, and may include a shortcut arrow overlay
+- The text label below may be localized, truncated, or non-English
+- Ignore other desktop files, folders, URLs, and distractors like Notepad++ or WordPad
+
+Return JSON:
+{{"x": int, "y": int, "confidence": float, "label": "detected text label"}}
+
+Rules:
+- Coordinates must be in the original screenshot pixel space
+- Confidence is 0.0 to 1.0
+- If the icon is not visible, return {{"x": -1, "y": -1, "confidence": 0.0, "label": "not_found"}}
+"""
+
 PRECISE_LOCATION = """You are viewing a cropped region of a Windows desktop screenshot.
 This crop is {crop_w}x{crop_h} pixels.
 
@@ -62,7 +83,7 @@ If the "{target}" icon is NOT in this crop, return:
 """
 
 VERIFICATION = """Look at this desktop screenshot. A UI element has been detected at
-position ({det_x}, {det_y}) — marked in the general area of the screen.
+position ({det_x}, {det_y}) - marked in the general area of the screen.
 
 QUESTION: Is the element at or very near that position the standard Windows
 "{target}" desktop shortcut icon?
@@ -74,4 +95,28 @@ Consider:
 
 Return JSON:
 {{"is_match": true/false, "reasoning": "brief explanation"}}
+"""
+
+POPUP_RESOLUTION = """You are analyzing a Windows desktop screenshot after automation lost focus.
+
+Foreground window title: "{window_title}"
+Foreground process: "{process_name}"
+
+TASK: Decide the safest single dismissal action for a blocking popup or unexpected dialog.
+
+Allowed actions only:
+- "ignore"
+- "press_escape"
+- "press_enter"
+- "hotkey_alt_f4"
+- "hotkey_alt_n"
+
+Return JSON:
+{{"action": "one_of_the_allowed_actions", "reasoning": "brief reason"}}
+
+Rules:
+- Choose "ignore" if the foreground window does not look like a popup/dialog.
+- Prefer the least destructive action.
+- Use "hotkey_alt_n" only when the dialog is clearly asking to discard or don't save.
+- Never invent other actions.
 """
