@@ -1,77 +1,86 @@
+from __future__ import annotations
+
+import ctypes
 import sys
-import time
-
-                                                                             
-                                                                 
-                                                                     
-                                                                        
-                                                                         
-                                                                 
-                                                            
-                                                                             
-if sys.platform == "linux":
-    from Xlib.display import Display as _XDisplay
-
-    if not hasattr(_XDisplay, "extension_add_subevent"):
-
-        def _extension_add_subevent(self, code, subcode, evt, name=None):
-            newevt = type(evt.__name__, evt.__bases__, evt.__dict__.copy())
-            newevt._code = code
-            self.display.add_extension_event(code, newevt, subcode)
-            if name is None:
-                name = evt.__name__
-            setattr(self.extension_event, name, (code, subcode))
-
-        _XDisplay.extension_add_subevent = _extension_add_subevent
-
-    if not hasattr(_XDisplay, "extension_add_error"):
-
-        def _extension_add_error(self, code, err):
-            self.display.add_extension_error(code, err)
-
-        _XDisplay.extension_add_error = _extension_add_error
-
-try:
-    import pyautogui
-except Exception as exc:                                                              
-    pyautogui = None
-    _PYAUTOGUI_IMPORT_ERROR = exc
-else:
-    _PYAUTOGUI_IMPORT_ERROR = None
+from typing import TYPE_CHECKING, Any
 
 from src import config
+from src.automation.control import execution_gate
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
+_KEYEVENTF_KEYUP = 0x0002
+_VK_BY_NAME = {
+    "alt": 0x12,
+    "ctrl": 0x11,
+    "d": 0x44,
+    "m": 0x4D,
+    "shift": 0x10,
+    "win": 0x5B,
+}
 
-                                                                   
-if pyautogui is not None:
-    pyautogui.FAILSAFE = True
-    pyautogui.PAUSE = 0.05
+if TYPE_CHECKING:
+    from botcity.core import DesktopBot
+
+_bot: Any | None = None
 
 
-def _require_pyautogui():
-    if pyautogui is None:
-        raise RuntimeError(f"pyautogui is unavailable: {_PYAUTOGUI_IMPORT_ERROR}")
-    return pyautogui
+def _desktop_bot_class():
+    try:
+        from botcity.core import DesktopBot
+    except Exception as exc:                                                
+        raise RuntimeError("BotCity DesktopBot is unavailable") from exc
+
+    return DesktopBot
+
+
+def get_bot() -> DesktopBot:
+    global _bot
+    if _bot is None:
+        _bot = _desktop_bot_class()()
+    return _bot
+
+
+def _send_system_hotkey(*keys: str) -> None:
+    normalized = [key.lower() for key in keys]
+    vk_codes = [_VK_BY_NAME.get(key) for key in normalized]
+    if any(vk is None for vk in vk_codes):
+        raise ValueError(f"Unsupported system hotkey: {keys}")
+
+    for vk_code in vk_codes:
+        ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+    for vk_code in reversed(vk_codes):
+        ctypes.windll.user32.keybd_event(vk_code, 0, _KEYEVENTF_KEYUP, 0)
+
+
+def wait_ms(milliseconds: int) -> None:
+    if milliseconds <= 0:
+        return
+    execution_gate.wait_if_paused()
+    get_bot().wait(milliseconds)
 
 
 def double_click(x: int, y: int) -> None:
     if config.DRY_RUN:
         logger.info("[DRY_RUN] double_click(%d, %d)", x, y)
         return
-    gui = _require_pyautogui()
+
+    execution_gate.wait_if_paused()
+    bot = get_bot()
     logger.debug("Double-clicking at (%d, %d)", x, y)
-    gui.doubleClick(x, y)
+    bot.click_at(x, y)
+    bot.wait(80)
+    bot.click_at(x, y)
 
 
 def click(x: int, y: int) -> None:
     if config.DRY_RUN:
         logger.info("[DRY_RUN] click(%d, %d)", x, y)
         return
-    gui = _require_pyautogui()
+
+    execution_gate.wait_if_paused()
     logger.debug("Clicking at (%d, %d)", x, y)
-    gui.click(x, y)
+    get_bot().click_at(x, y)
 
 
 def type_text(text: str, interval: float | None = None) -> None:
@@ -79,34 +88,40 @@ def type_text(text: str, interval: float | None = None) -> None:
         logger.info("[DRY_RUN] type_text(%d chars)", len(text))
         return
 
-    interval = interval or config.TYPING_INTERVAL
-    gui = _require_pyautogui()
+    bot = get_bot()
+    interval_ms = int((interval or config.TYPING_INTERVAL) * 1000)
 
-    try:
-        gui.write(text, interval=interval)
-    except Exception:
-                                                                      
-        import pyperclip
-        pyperclip.copy(text)
-        gui.hotkey("ctrl", "v")
-        time.sleep(0.2)
+    if text.isascii():
+        chunk_size = 32
+        for offset in range(0, len(text), chunk_size):
+            execution_gate.wait_if_paused()
+            bot.type_key(text[offset:offset + chunk_size], interval=interval_ms)
+        return
+
+    execution_gate.wait_if_paused()
+    bot.paste(text)
 
 
 def hotkey(*keys: str) -> None:
     if config.DRY_RUN:
         logger.info("[DRY_RUN] hotkey(%s)", "+".join(keys))
         return
-    gui = _require_pyautogui()
+
+    execution_gate.wait_if_paused()
     logger.debug("Hotkey: %s", "+".join(keys))
-    gui.hotkey(*keys)
+    if any(key.lower() == "win" for key in keys):
+        _send_system_hotkey(*keys)
+        return
+    get_bot().type_keys(list(keys))
 
 
 def press(key: str) -> None:
     if config.DRY_RUN:
         logger.info("[DRY_RUN] press(%s)", key)
         return
-    gui = _require_pyautogui()
-    gui.press(key)
+
+    execution_gate.wait_if_paused()
+    get_bot().type_keys([key])
 
 
 def show_desktop() -> None:
@@ -114,10 +129,6 @@ def show_desktop() -> None:
         logger.info("[DRY_RUN] show_desktop()")
         return
 
-    gui = _require_pyautogui()
-    if sys.platform == "win32":
-        gui.hotkey("win", "m")
-    else:
-        gui.hotkey("win", "d")
-
-    time.sleep(config.SETTLE_DELAY)
+    combo = ("win", "m") if sys.platform == "win32" else ("win", "d")
+    hotkey(*combo)
+    wait_ms(int(config.SETTLE_DELAY * 1000))

@@ -3,57 +3,55 @@ from types import SimpleNamespace
 from src.automation import window
 
 
-def test_wait_for_window_uses_contains_matching(monkeypatch):
+def test_wait_for_window_uses_internal_lookup(monkeypatch):
     calls = []
     monkeypatch.setattr(window.config, "DRY_RUN", False)
 
-    fake_re = SimpleNamespace(CONTAINS="contains", IGNORECASE="ignorecase")
+    def fake_find(title_contains, timeout_ms):
+        calls.append((title_contains, timeout_ms))
+        return SimpleNamespace(window_text=lambda: "Untitled - Notepad")
 
-    def fake_get_windows(title, condition=None, flags=None):
-        calls.append((title, condition, flags))
-        return [SimpleNamespace(title="Untitled - Notepad", isActive=True, isVisible=True)]
-
-    monkeypatch.setattr(
-        window,
-        "pywinctl",
-        SimpleNamespace(Re=fake_re, getWindowsWithTitle=fake_get_windows),
-    )
+    monkeypatch.setattr(window, "_find_window", fake_find)
 
     assert window.wait_for_window("Notepad", timeout=1) is True
-    assert calls == [("Notepad", "contains", "ignorecase")]
+    assert calls == [("Notepad", 1000)]
 
 
-def test_activate_window_picks_active_visible_best_match(monkeypatch):
-    activated = []
-    restored = []
+def test_activate_window_restores_and_focuses_wrapper(monkeypatch):
     monkeypatch.setattr(window.config, "DRY_RUN", False)
+    restored = []
+    focused = []
 
     class FakeWindow:
-        def __init__(self, title, is_active, is_visible, minimized=False):
-            self.title = title
-            self.isActive = is_active
-            self.isVisible = is_visible
-            self.isMinimized = minimized
+        def wrapper_object(self):
+            return self
+
+        def is_minimized(self):
+            return True
 
         def restore(self):
-            restored.append(self.title)
-            self.isMinimized = False
+            restored.append(True)
 
-        def activate(self):
-            activated.append(self.title)
+        def set_focus(self):
+            focused.append(True)
 
-    fake_re = SimpleNamespace(CONTAINS="contains", IGNORECASE="ignorecase")
-    windows = [
-        FakeWindow("Untitled - Notepad", is_active=False, is_visible=True),
-        FakeWindow("post_1.txt - Notepad", is_active=True, is_visible=True),
-    ]
+        def window_text(self):
+            return "post_1.txt - Notepad"
 
-    monkeypatch.setattr(
-        window,
-        "pywinctl",
-        SimpleNamespace(Re=fake_re, getWindowsWithTitle=lambda *args, **kwargs: windows),
-    )
+    monkeypatch.setattr(window, "_find_window", lambda *args, **kwargs: FakeWindow())
+    monkeypatch.setattr(window, "wait_ms", lambda *_: None)
 
     assert window.activate_window("Notepad") is True
-    assert restored == []
-    assert activated == ["post_1.txt - Notepad"]
+    assert restored == [True]
+    assert focused == [True]
+
+
+def test_is_window_open_returns_false_when_lookup_fails(monkeypatch):
+    monkeypatch.setattr(window.config, "DRY_RUN", False)
+    monkeypatch.setattr(
+        window,
+        "_find_window",
+        lambda *args, **kwargs: (_ for _ in ()).throw(LookupError("missing")),
+    )
+
+    assert window.is_window_open("Confirm") is False
