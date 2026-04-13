@@ -1,12 +1,14 @@
-"""Notepad-specific automation: launch, write, save, close.
+"""Notepad-specific automation: launch, write, save, and close."""
 
-Save As handling uses absolute path injection — no UI directory navigation.
-"""
+from __future__ import annotations
 
+import subprocess
 import time
+from pathlib import Path
 
 from src import config
-from src.automation.desktop import hotkey, press, type_text
+from src.automation.control import execution_gate
+from src.automation.desktop import hotkey, press, type_text, wait_ms
 from src.automation.window import (
     activate_window,
     close_window,
@@ -19,31 +21,39 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _wait_for_saved_file(file_path, previous_mtime_ns: int | None) -> bool:
-    """Wait for the target file to appear or update on disk."""
-    deadline = time.time() + config.SAVE_DIALOG_TIMEOUT
+def _wait_for_saved_file(
+    file_path: Path,
+    previous_mtime_ns: int | None,
+    previous_size: int | None,
+) -> bool:
+    """Poll the filesystem until the target file appears or changes."""
+    deadline = time.monotonic() + config.SAVE_DIALOG_TIMEOUT
 
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
+        execution_gate.wait_if_paused()
         if file_path.exists():
             current_mtime_ns = file_path.stat().st_mtime_ns
-            if previous_mtime_ns is None or current_mtime_ns != previous_mtime_ns:
+            current_size = file_path.stat().st_size
+            if (
+                previous_mtime_ns is None
+                or current_mtime_ns != previous_mtime_ns
+                or current_size != previous_size
+            ):
                 return True
-        time.sleep(0.2)
+
+        wait_ms(200)
 
     return False
 
 
 def ensure_output_directory() -> None:
-    """Create the output directory if it doesn't exist."""
+    """Create the output directory if it does not exist."""
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("Output directory ready: %s", config.OUTPUT_DIR)
 
 
 def write_post(post: dict) -> None:
-    """Type formatted post content into the active Notepad window.
-
-    Format: "Title: {title}\n\n{body}"
-    """
+    """Type formatted post content into the active Notepad window."""
     title = post.get("title", "Untitled")
     body = post.get("body", "")
     content = f"Title: {title}\n\n{body}"
@@ -52,87 +62,100 @@ def write_post(post: dict) -> None:
     type_text(content)
 
 
-def save_post(post_id: int) -> None:
-    """Save current Notepad content as post_{id}.txt.
+def launch_notepad_process() -> bool:
+    """Launch Notepad directly as a deterministic recovery fallback."""
+    if config.DRY_RUN:
+        logger.info("[DRY_RUN] launch_notepad_process() -> True")
+        return True
 
-    Rock-solid Save As handling:
-    1. Trigger Ctrl+S (opens Save As for new files)
-    2. Wait for Save As dialog to become active
-    3. Select all text in filename field
-    4. Inject full absolute path (no UI directory navigation)
-    5. Press Enter to confirm
-    6. Handle overwrite confirmation if file exists
-    """
+    try:
+        subprocess.Popen(["notepad.exe"])
+    except OSError as exc:
+        logger.error("Deterministic Notepad launch failed: %s", exc)
+        return False
+
+    return wait_for_window("Notepad", timeout=config.WINDOW_TIMEOUT)
+
+
+def save_post(post_id: int) -> None:
+    """Save current Notepad content as ``post_{id}.txt``."""
     file_path = config.OUTPUT_DIR / f"post_{post_id}.txt"
     absolute_path = str(file_path.resolve())
+
+    if config.DRY_RUN:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(
+            f"DRY_RUN placeholder for post {post_id}\n",
+            encoding="utf-8",
+        )
+        logger.info("[DRY_RUN] Simulated save for post_%d at %s", post_id, absolute_path)
+        return
+
     previous_mtime_ns = file_path.stat().st_mtime_ns if file_path.exists() else None
+    previous_size = file_path.stat().st_size if file_path.exists() else None
 
     logger.info("Saving post_%d to %s", post_id, absolute_path)
 
     hotkey("ctrl", "s")
-
     if not wait_for_window("Save", timeout=config.SAVE_DIALOG_TIMEOUT):
-        # Fallback: try Ctrl+Shift+S for explicit Save As
         logger.warning("Save dialog not detected, trying Ctrl+Shift+S")
         hotkey("ctrl", "shift", "s")
         if not wait_for_window("Save", timeout=config.SAVE_DIALOG_TIMEOUT):
             raise WindowNotFoundError("Save As dialog did not appear")
 
-    time.sleep(0.3)
-    activate_window("Save")
-    time.sleep(0.1)
+    if not activate_window("Save", timeout=config.SAVE_DIALOG_TIMEOUT):
+        raise WindowNotFoundError("Save As dialog could not be focused")
 
-    # Clear filename field and type absolute path
+    wait_ms(150)
+    hotkey("alt", "n")
+    wait_ms(80)
     hotkey("ctrl", "a")
-    time.sleep(0.1)
+    wait_ms(80)
     type_text(absolute_path, interval=0.01)
-    time.sleep(0.2)
+    wait_ms(120)
 
-    # Confirm save
     press("enter")
-    time.sleep(0.5)
+    wait_ms(250)
 
-    # Handle "file already exists" overwrite dialog
     if is_window_open("Confirm"):
         logger.debug("Overwrite confirmation detected, pressing Yes")
         hotkey("alt", "y")
-        time.sleep(0.3)
+        wait_ms(150)
 
-    # Verify Save As dialog closed (save completed)
-    time.sleep(0.3)
+    if _wait_for_saved_file(file_path, previous_mtime_ns, previous_size):
+        if is_window_open("Save"):
+            logger.warning(
+                "Save dialog still open after file write; dismissing it with Escape"
+            )
+            press("esc")
+            wait_ms(100)
+        logger.info("Post %d saved successfully", post_id)
+        return
+
+    wait_ms(150)
     if is_window_open("Save"):
         raise WindowNotFoundError("Save dialog is still open after save attempt")
 
-    if not _wait_for_saved_file(file_path, previous_mtime_ns):
-        raise WindowNotFoundError(f"Saved file was not written: {file_path}")
-
-    logger.info("Post %d saved successfully", post_id)
+    raise WindowNotFoundError(f"Saved file was not written: {file_path}")
 
 
 def close_notepad() -> None:
-    """Close Notepad gracefully.
-
-    Tries pywinctl close first, falls back to Alt+F4.
-    Handles any "save changes?" prompts by discarding.
-    """
+    """Close Notepad gracefully and discard prompts when needed."""
     if not is_window_open("Notepad"):
         logger.debug("Notepad already closed")
         return
 
-    # Try window manager close
     if not close_window("Notepad"):
         logger.debug("Window close failed, trying Alt+F4")
         activate_window("Notepad")
-        time.sleep(0.2)
+        wait_ms(100)
         hotkey("alt", "F4")
 
-    time.sleep(0.3)
+    wait_ms(200)
 
-    # Handle "do you want to save?" prompt
     if is_window_open("Notepad"):
-        # Press "Don't Save" — Tab to the button and Enter, or Alt+N
         hotkey("alt", "n")
-        time.sleep(0.3)
+        wait_ms(150)
 
     if is_window_open("Notepad"):
         logger.warning("Notepad still open after close attempts")
