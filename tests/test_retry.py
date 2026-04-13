@@ -83,7 +83,7 @@ def test_retry_backoff_increases():
             raise ValueError("fail")
         return "ok"
 
-    with patch("src.core.retry.time.sleep", side_effect=mock_sleep):
+    with patch("src.core.retry._BACKOFF_EVENT.wait", side_effect=mock_sleep):
         result = fail_twice()
 
     assert result == "ok"

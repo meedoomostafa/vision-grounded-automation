@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from dataclasses import dataclass
+from threading import Event
 
 from google import genai
 from google.genai import types
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from src import config
 from src.core.exceptions import GroundingError, IconNotFoundError
@@ -17,6 +19,7 @@ from src.vision.annotator import annotate_detection, save_debug_crop
 from src.vision.screenshot import crop_region
 
 logger = get_logger(__name__)
+_RATE_LIMIT_EVENT = Event()
 
 
 @dataclass
@@ -44,14 +47,15 @@ class VisionGrounder:
         self._model = model_name or config.GEMINI_MODEL
 
         if not config.DRY_RUN:
-            self._client = genai.Client(api_key=config.GOOGLE_API_KEY)
+            self._client_cache: dict[str, genai.Client] = {}
         else:
-            self._client = None
+            self._client_cache = {}
 
         self._last_known_coords: tuple[int, int] | None = None
         self._last_region_bbox: tuple[int, int, int, int] | None = None
         self._search_count = 0
         self._last_mllm_call_at = 0.0
+        self._mllm_calls_used = 0
 
     def ground(self, target: str, screenshot: Image.Image) -> tuple[int, int]:
         self._search_count += 1
@@ -65,11 +69,25 @@ class VisionGrounder:
                                                                  
         if self._last_known_coords:
             try:
-                coords = self._precise_reground(target, screenshot)
+                coords = self._precise_reground(
+                    target,
+                    screenshot,
+                    verify=True,
+                )
                 logger.info("Precise re-ground succeeded: (%d, %d)", *coords)
                 return coords
             except GroundingError:
                 logger.warning("Precise re-ground failed, falling back to full search")
+
+        direct_coords = self._verified_direct_fullscreen_locate(target, screenshot)
+        if direct_coords is not None:
+            logger.info(
+                "Verified direct full-screen locate found '%s' at (%d, %d)",
+                target,
+                direct_coords[0],
+                direct_coords[1],
+            )
+            return direct_coords
 
         coords = self._full_cascaded_search(target, screenshot)
         logger.info("Full cascaded search found '%s' at (%d, %d)", target, *coords)
@@ -108,15 +126,16 @@ class VisionGrounder:
                 target, cropped, region,
                 screen_size=(screenshot.width, screenshot.height),
             )
-            if not candidate or candidate.confidence <= 0:
-                fallback = self._fallback_candidate_from_region(region)
-                if self._verify_candidate(target, screenshot, fallback):
-                    candidates.append(fallback)
-                    logger.info(
-                        "Using verified heuristic candidate from region at (%d, %d)",
-                        fallback.x,
-                        fallback.y,
-                    )
+            if not candidate or candidate.confidence < config.PRECISE_MIN_CONFIDENCE:
+                if config.ALLOW_HEURISTIC_REGION_FALLBACK:
+                    fallback = self._fallback_candidate_from_region(region)
+                    if self._verify_candidate(target, screenshot, fallback):
+                        candidates.append(fallback)
+                        logger.info(
+                            "Using verified heuristic candidate from region at (%d, %d)",
+                            fallback.x,
+                            fallback.y,
+                        )
                 continue
 
             save_debug_crop(cropped, "2", i, f"precise_{candidate.x}_{candidate.y}")
@@ -144,7 +163,7 @@ class VisionGrounder:
                                                 
 
     def _precise_reground(
-        self, target: str, screenshot: Image.Image
+        self, target: str, screenshot: Image.Image, verify: bool = False
     ) -> tuple[int, int]:
         cx, cy = self._last_known_coords
         half = config.PRECISE_CROP_SIZE
@@ -165,7 +184,7 @@ class VisionGrounder:
             screen_size=(screenshot.width, screenshot.height),
         )
 
-        if not candidate or candidate.confidence < 0.5:
+        if not candidate or candidate.confidence < config.PRECISE_MIN_CONFIDENCE:
             fallback = Candidate(
                 x=cx,
                 y=cy,
@@ -173,12 +192,17 @@ class VisionGrounder:
                 label="cached_position",
                 region_bbox=bbox,
             )
-            if self._verify_candidate(target, screenshot, fallback):
+            if verify and self._verify_candidate(target, screenshot, fallback):
                 self._last_region_bbox = bbox
                 return (cx, cy)
             raise GroundingError("Precise re-ground: low confidence or not found")
 
-        if not self._verify_candidate(target, screenshot, candidate):
+        candidate.x, candidate.y = self._snap_to_visual_cluster(
+            screenshot,
+            candidate.x,
+            candidate.y,
+        )
+        if verify and not self._verify_candidate(target, screenshot, candidate):
             raise GroundingError("Precise re-ground: verification failed")
 
         self._last_known_coords = (candidate.x, candidate.y)
@@ -186,6 +210,69 @@ class VisionGrounder:
         return (candidate.x, candidate.y)
 
                                  
+
+    def _direct_fullscreen_locate(
+        self,
+        target: str,
+        screenshot: Image.Image,
+    ) -> Candidate | None:
+        prompt = prompts.FULLSCREEN_LOCATION.format(
+            width=screenshot.width,
+            height=screenshot.height,
+            target=target,
+        )
+
+        region = Region(
+            x1=0,
+            y1=0,
+            x2=screenshot.width,
+            y2=screenshot.height,
+            confidence=1.0,
+        )
+        return self._locate_in_region(
+            target,
+            screenshot,
+            region,
+            screen_size=(screenshot.width, screenshot.height),
+            prompt_template=prompt,
+        )
+
+    def _verified_direct_fullscreen_locate(
+        self,
+        target: str,
+        screenshot: Image.Image,
+        attempts: int = 3,
+    ) -> tuple[int, int] | None:
+        for attempt in range(1, attempts + 1):
+            candidate = self._direct_fullscreen_locate(target, screenshot)
+            if candidate is None or candidate.confidence < config.PRECISE_MIN_CONFIDENCE:
+                logger.warning(
+                    "Direct full-screen locate attempt %d/%d returned no reliable candidate",
+                    attempt,
+                    attempts,
+                )
+                continue
+
+            candidate.x, candidate.y = self._snap_to_visual_cluster(
+                screenshot,
+                candidate.x,
+                candidate.y,
+            )
+            if not self._verify_candidate(target, screenshot, candidate):
+                logger.warning(
+                    "Direct full-screen locate attempt %d/%d failed verification at (%d, %d)",
+                    attempt,
+                    attempts,
+                    candidate.x,
+                    candidate.y,
+                )
+                continue
+
+            self._last_known_coords = (candidate.x, candidate.y)
+            self._last_region_bbox = candidate.region_bbox
+            return (candidate.x, candidate.y)
+
+        return None
 
     def _identify_regions(self, target: str, screenshot: Image.Image) -> list[Region]:
         prompt = prompts.REGION_IDENTIFICATION.format(
@@ -219,8 +306,9 @@ class VisionGrounder:
     def _locate_in_region(
         self, target: str, cropped: Image.Image, region: Region,
         screen_size: tuple[int, int] = (1920, 1080),
+        prompt_template: str | None = None,
     ) -> Candidate | None:
-        prompt = prompts.PRECISE_LOCATION.format(
+        prompt = prompt_template or prompts.PRECISE_LOCATION.format(
             crop_w=cropped.width,
             crop_h=cropped.height,
             target=target,
@@ -285,6 +373,114 @@ class VisionGrounder:
                              
 
     @staticmethod
+    def _snap_to_visual_cluster(
+        screenshot: Image.Image,
+        approx_x: int,
+        approx_y: int,
+    ) -> tuple[int, int]:
+        max_axis_delta = 160
+        max_cluster_width = 160
+        max_cluster_height = 190
+        left = max(0, approx_x - 220)
+        top = max(0, approx_y - 40)
+        right = min(screenshot.width, approx_x + 220)
+        bottom = min(screenshot.height, approx_y + 260)
+
+        crop = screenshot.crop((left, top, right, bottom)).convert("RGB")
+        blurred = crop.filter(ImageFilter.GaussianBlur(radius=10))
+        width, height = crop.size
+        crop_pixels = crop.load()
+        blurred_pixels = blurred.load()
+
+        mask = [0] * (width * height)
+        for cy in range(height):
+            for cx in range(width):
+                pixel = crop_pixels[cx, cy]
+                blurred_pixel = blurred_pixels[cx, cy]
+                delta = sum(abs(pixel[channel] - blurred_pixel[channel]) for channel in range(3))
+                if delta > 45:
+                    mask[(cy * width) + cx] = 1
+
+        seen: set[int] = set()
+        best_click = (approx_x, approx_y)
+        best_score = float("-inf")
+
+        for index, value in enumerate(mask):
+            if not value or index in seen:
+                continue
+
+            queue = deque([index])
+            seen.add(index)
+            area = 0
+            min_x = width
+            min_y = height
+            max_x = 0
+            max_y = 0
+
+            while queue:
+                current = queue.popleft()
+                area += 1
+                cx = current % width
+                cy = current // width
+                min_x = min(min_x, cx)
+                min_y = min(min_y, cy)
+                max_x = max(max_x, cx)
+                max_y = max(max_y, cy)
+
+                for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
+                    if 0 <= nx < width and 0 <= ny < height:
+                        neighbor = (ny * width) + nx
+                        if mask[neighbor] and neighbor not in seen:
+                            seen.add(neighbor)
+                            queue.append(neighbor)
+
+            cluster_width = (max_x - min_x) + 1
+            cluster_height = (max_y - min_y) + 1
+            if area < 60:
+                continue
+            if cluster_width > max_cluster_width or cluster_height > max_cluster_height:
+                continue
+
+            abs_x1 = left + min_x
+            abs_y1 = top + min_y
+            abs_x2 = left + max_x
+            abs_y2 = top + max_y
+            center_x = abs_x1 + ((abs_x2 - abs_x1) // 2)
+            center_y = abs_y1 + ((abs_y2 - abs_y1) // 2)
+            score = area - (abs(center_x - approx_x) * 3) - (abs(center_y - approx_y) * 2)
+            if score <= best_score:
+                continue
+
+            y_offset = max(12, min((abs_y2 - abs_y1) // 3, 48))
+            best_click = (center_x, min(abs_y2, abs_y1 + y_offset))
+            best_score = score
+
+        dx = abs(best_click[0] - approx_x)
+        dy = abs(best_click[1] - approx_y)
+        if dx > max_axis_delta or dy > max_axis_delta:
+            logger.debug(
+                "Rejected snap from (%d, %d) to (%d, %d): delta exceeds %dpx",
+                approx_x,
+                approx_y,
+                best_click[0],
+                best_click[1],
+                max_axis_delta,
+            )
+            return (approx_x, approx_y)
+
+        if best_click != (approx_x, approx_y):
+            logger.info(
+                "Snapped approximate point (%d, %d) to visual cluster (%d, %d)",
+                approx_x,
+                approx_y,
+                best_click[0],
+                best_click[1],
+            )
+            save_debug_crop(crop, "S", 0, f"snap_{best_click[0]}_{best_click[1]}")
+
+        return best_click
+
+    @staticmethod
     def _fallback_candidate_from_region(region: Region) -> Candidate:
         width = region.x2 - region.x1
         height = region.y2 - region.y1
@@ -315,14 +511,36 @@ class VisionGrounder:
         if config.DRY_RUN or config.MLLM_MIN_INTERVAL_SECONDS <= 0:
             return
 
+        key_count = max(1, len(getattr(config, "GEMINI_API_KEYS", ()) or ()))
+        effective_interval = config.MLLM_MIN_INTERVAL_SECONDS / key_count
         now = time.monotonic()
         elapsed = now - self._last_mllm_call_at
-        remaining = config.MLLM_MIN_INTERVAL_SECONDS - elapsed
+        remaining = effective_interval - elapsed
         if remaining > 0:
             logger.info("Waiting %.1fs before next MLLM call to respect rate limits", remaining)
-            time.sleep(remaining)
+            _RATE_LIMIT_EVENT.wait(remaining)
 
         self._last_mllm_call_at = time.monotonic()
+
+    def _get_client(self) -> genai.Client:
+        if config.DRY_RUN:
+            raise RuntimeError("MLLM client is unavailable in DRY_RUN mode")
+
+        key_manager = getattr(config, "GEMINI_KEY_MANAGER", None)
+        if key_manager:
+            api_key = key_manager.next_key()
+        else:
+            api_key = config.GOOGLE_API_KEY
+
+        if not api_key:
+            raise GroundingError("No Gemini API key configured")
+
+        client = self._client_cache.get(api_key)
+        if client is None:
+            client = genai.Client(api_key=api_key)
+            self._client_cache[api_key] = client
+
+        return client
 
     @retry(
         max_attempts=config.MAX_RETRIES,
@@ -333,9 +551,16 @@ class VisionGrounder:
         if config.DRY_RUN:
             return self._mock_response(prompt)
 
+        budget = config.MAX_MLLM_CALLS_PER_RUN
+        if budget > 0 and self._mllm_calls_used >= budget:
+            raise GroundingError(
+                f"MLLM call budget exhausted ({self._mllm_calls_used}/{budget})"
+            )
+
         try:
             self._wait_for_mllm_slot()
-            response = self._client.models.generate_content(
+            client = self._get_client()
+            response = client.models.generate_content(
                 model=self._model,
                 contents=[prompt, image],
                 config=types.GenerateContentConfig(
@@ -343,6 +568,7 @@ class VisionGrounder:
                     temperature=0.1,
                 ),
             )
+            self._mllm_calls_used += 1
             text = response.text or ""
         except Exception as exc:
             raise GroundingError(f"MLLM API call failed: {exc}") from exc
@@ -361,6 +587,26 @@ class VisionGrounder:
                     pass
             raise GroundingError(f"MLLM returned non-JSON: {text[:300]}")
 
+    def analyze_popup(self, screenshot: Image.Image, window_title: str, process_name: str) -> dict:
+        prompt = prompts.POPUP_RESOLUTION.format(
+            window_title=window_title or "<unknown>",
+            process_name=process_name or "<unknown>",
+        )
+        data = self._query_mllm(prompt, screenshot)
+        action = str(data.get("action", "ignore")).strip().lower()
+        if action not in {
+            "ignore",
+            "press_escape",
+            "press_enter",
+            "hotkey_alt_f4",
+            "hotkey_alt_n",
+        }:
+            action = "ignore"
+        return {
+            "action": action,
+            "reasoning": str(data.get("reasoning", "")),
+        }
+
     @staticmethod
     def _mock_response(prompt: str) -> dict:
         lower = prompt.lower()
@@ -377,6 +623,8 @@ class VisionGrounder:
                     }
                 ]
             }
+        if "full screenshot" in lower and "exact center" in lower:
+            return {"x": 1280, "y": 455, "confidence": 0.96, "label": "Notepad"}
         if "exact center" in lower or "within this cropped" in lower:
             return {"x": 150, "y": 150, "confidence": 0.95, "label": "Notepad"}
         if "is_match" in lower or "verify" in lower:
