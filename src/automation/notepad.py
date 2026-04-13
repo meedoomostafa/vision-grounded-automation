@@ -49,6 +49,11 @@ def ensure_output_directory() -> None:
 
 
 def write_post(post: dict) -> None:
+                                                                                                   
+    if not config.DRY_RUN:
+        hotkey("ctrl", "n")
+        wait_ms(200)
+
     title = post.get("title", "Untitled")
     body = post.get("body", "")
     content = f"Title: {title}\n\n{body}"
