@@ -4,14 +4,17 @@ version = "0.1.0"
 description = "Vision-Based Desktop Automation with Dynamic Icon Grounding"
 requires-python = ">=3.12"
 dependencies = [
-    "mss>=9.0.0",
-    "pyautogui>=0.9.54",
-    "pywinctl>=0.4",
-    "Pillow>=10.0.0",
-    "requests>=2.31.0",
+    "botcity-framework-core>=1.1.3",
     "google-genai>=1.0.0",
+    "mss>=9.0.0",
+    "Pillow>=10.0.0",
+    "psutil>=5.9.8,<6.0",
+    "pywin32>=311",
+    "pywinctl>=0.4",
     "python-dotenv>=1.0.0",
     "pyperclip>=1.8.0",
+    "requests>=2.31.0",
+    "pywinauto>=0.6.9",
 ]
 
 [project.scripts]
