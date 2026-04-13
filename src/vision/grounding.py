@@ -345,23 +345,55 @@ class VisionGrounder:
     def _verify_candidate(
         self, target: str, screenshot: Image.Image, candidate: Candidate
     ) -> bool:
-        marked = annotate_detection(
-            screenshot,
-            (candidate.x, candidate.y),
+                                                        
+        zoom_size = 300
+        zoom_bbox = (
+            max(0, candidate.x - zoom_size // 2),
+            max(0, candidate.y - zoom_size // 2),
+            min(screenshot.width, candidate.x + zoom_size // 2),
+            min(screenshot.height, candidate.y + zoom_size // 2),
+        )
+        zoomed = crop_region(screenshot, zoom_bbox)
+                                                                   
+        local_x = candidate.x - zoom_bbox[0]
+        local_y = candidate.y - zoom_bbox[1]
+        
+        marked_crop = annotate_detection(
+            zoomed,
+            (local_x, local_y),
             label=f"Candidate: {target}",
         )
-        save_debug_crop(marked, "3", 0, f"verify_{candidate.x}_{candidate.y}")
+        save_debug_crop(marked_crop, "3", 0, f"verify_crop_{candidate.x}_{candidate.y}")
 
         prompt = prompts.VERIFICATION.format(
-            det_x=candidate.x,
-            det_y=candidate.y,
+            det_x=local_x,
+            det_y=local_y,
             target=target,
         )
 
-        data = self._query_mllm(prompt, marked)
-
+        data = self._query_mllm(prompt, marked_crop)
         is_match = data.get("is_match", False)
         reasoning = data.get("reasoning", "")
+
+        if not is_match:
+            logger.debug("Crop verification failed: %s", reasoning)
+                                                                         
+            logger.info("Falling back to full-screen verification...")
+            marked_full = annotate_detection(
+                screenshot,
+                (candidate.x, candidate.y),
+                label=f"Candidate: {target}",
+            )
+            save_debug_crop(marked_full, "3", 1, f"verify_full_{candidate.x}_{candidate.y}")
+            
+            prompt_full = prompts.VERIFICATION.format(
+                det_x=candidate.x,
+                det_y=candidate.y,
+                target=target,
+            )
+            data_full = self._query_mllm(prompt_full, marked_full)
+            is_match = data_full.get("is_match", False)
+            reasoning = data_full.get("reasoning", "")
 
         if is_match:
             logger.debug("Verification passed: %s", reasoning)
@@ -378,7 +410,7 @@ class VisionGrounder:
         approx_x: int,
         approx_y: int,
     ) -> tuple[int, int]:
-        max_axis_delta = 160
+        max_axis_delta = 40
         max_cluster_width = 160
         max_cluster_height = 190
         left = max(0, approx_x - 220)
