@@ -16,3 +16,7 @@ class WindowNotFoundError(DesktopAutomationError):
 
 class APIError(DesktopAutomationError):
     pass
+
+
+class SingletonLockError(DesktopAutomationError):
+    pass
