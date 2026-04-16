@@ -11,12 +11,21 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 _KEYEVENTF_KEYUP = 0x0002
 _VK_BY_NAME = {
-    "alt": 0x12,
-    "ctrl": 0x11,
-    "d": 0x44,
-    "m": 0x4D,
-    "shift": 0x10,
+    "alt": 0xA4,
+    "ctrl": 0xA2,
+    "shift": 0xA0,
     "win": 0x5B,
+    "enter": 0x0D,
+    "esc": 0x1B,
+    "a": 0x41,
+    "c": 0x43,
+    "d": 0x44,
+    "f4": 0x73,
+    "m": 0x4D,
+    "n": 0x4E,
+    "s": 0x53,
+    "v": 0x56,
+    "y": 0x59,
 }
 
 if TYPE_CHECKING:
@@ -48,9 +57,15 @@ def _send_system_hotkey(*keys: str) -> None:
         raise ValueError(f"Unsupported system hotkey: {keys}")
 
     for vk_code in vk_codes:
-        ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+        scan_code = ctypes.windll.user32.MapVirtualKeyA(vk_code, 0)
+        ctypes.windll.user32.keybd_event(vk_code, scan_code, 0, 0)
+    
+    import time
+    time.sleep(0.02)
+    
     for vk_code in reversed(vk_codes):
-        ctypes.windll.user32.keybd_event(vk_code, 0, _KEYEVENTF_KEYUP, 0)
+        scan_code = ctypes.windll.user32.MapVirtualKeyA(vk_code, 0)
+        ctypes.windll.user32.keybd_event(vk_code, scan_code, _KEYEVENTF_KEYUP, 0)
 
 
 def wait_ms(milliseconds: int) -> None:
@@ -86,48 +101,37 @@ def click(x: int, y: int) -> None:
 
 
 def type_text(text: str, interval: float | None = None) -> None:
-    """Type text using BotCity. Falls back to paste for non-ASCII content."""
+    """Type text using clipboard paste to avoid keyboard layout issues."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] type_text(%d chars)", len(text))
         return
 
-    bot = get_bot()
-    interval_ms = int((interval or config.TYPING_INTERVAL) * 1000)
-
-    if text.isascii():
-        chunk_size = 32
-        for offset in range(0, len(text), chunk_size):
-            execution_gate.wait_if_paused()
-            bot.type_key(text[offset:offset + chunk_size], interval=interval_ms)
-        return
-
     execution_gate.wait_if_paused()
-    bot.paste(text)
+    import pyperclip
+    pyperclip.copy(text)
+    wait_ms(50)
+    _send_system_hotkey("ctrl", "v")
 
 
 def hotkey(*keys: str) -> None:
-    """Press a keyboard shortcut using BotCity."""
+    """Press a keyboard shortcut using System Hotkeys."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] hotkey(%s)", "+".join(keys))
         return
 
     execution_gate.wait_if_paused()
     logger.debug("Hotkey: %s", "+".join(keys))
-    if any(key.lower() == "win" for key in keys):
-        _send_system_hotkey(*keys)
-        return
-    get_bot().type_keys(list(keys))
+    _send_system_hotkey(*keys)
 
 
 def press(key: str) -> None:
-    """Press a single key using BotCity."""
+    """Press a single key using System Hotkeys."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] press(%s)", key)
         return
 
     execution_gate.wait_if_paused()
-    get_bot().type_keys([key])
-
+    _send_system_hotkey(key)
 
 def show_desktop() -> None:
     """Navigate to the desktop so icons are visible before grounding."""

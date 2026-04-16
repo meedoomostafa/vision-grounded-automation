@@ -24,8 +24,10 @@ def _timeout_ms(timeout: int | float | None) -> int:
     return max(int(seconds * 1000), 250)
 
 
-def _title_re(title_contains: str) -> str:
-    return f".*{re.escape(title_contains)}.*"
+def _title_re(title_contains: str | tuple[str, ...]) -> str:
+    if isinstance(title_contains, str):
+        return f".*{re.escape(title_contains)}.*"
+    return f".*({'|'.join(re.escape(t) for t in title_contains)}).*"
 
 
 def _window_label(window) -> str:
@@ -64,7 +66,7 @@ def _is_minimized(window) -> bool:
     return False
 
 
-def _find_window_with_botcity(title_contains: str, timeout_ms: int):
+def _find_window_with_botcity(title_contains: str | tuple[str, ...], timeout_ms: int):
     bot = get_bot()
     selector = {"title_re": _title_re(title_contains)}
     last_error = None
@@ -83,7 +85,7 @@ def _find_window_with_botcity(title_contains: str, timeout_ms: int):
     ) from last_error
 
 
-def _find_window_with_pywinauto(title_contains: str, timeout_ms: int):
+def _find_window_with_pywinauto(title_contains: str | tuple[str, ...], timeout_ms: int):
     if Desktop is None:
         raise LookupError(f"pywinauto is unavailable: {_PYWINAUTO_IMPORT_ERROR}")
 
@@ -104,7 +106,7 @@ def _find_window_with_pywinauto(title_contains: str, timeout_ms: int):
     ) from last_error
 
 
-def _find_window(title_contains: str, timeout_ms: int):
+def _find_window(title_contains: str | tuple[str, ...], timeout_ms: int):
     try:
         return _find_window_with_botcity(title_contains, timeout_ms)
     except LookupError as botcity_error:
@@ -129,7 +131,7 @@ def _botcity_backends():
     )
 
 
-def wait_for_window(title_contains: str, timeout: int | float | None = None) -> bool:
+def wait_for_window(title_contains: str | tuple[str, ...], timeout: int | float | None = None) -> bool:
     """Wait until a matching window exists."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] wait_for_window('%s') -> True", title_contains)
@@ -151,7 +153,7 @@ def wait_for_window(title_contains: str, timeout: int | float | None = None) -> 
     return True
 
 
-def activate_window(title_contains: str, timeout: int | float | None = None) -> bool:
+def activate_window(title_contains: str | tuple[str, ...], timeout: int | float | None = None) -> bool:
     """Bring a matching window to the foreground."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] activate_window('%s') -> True", title_contains)
@@ -183,7 +185,7 @@ def activate_window(title_contains: str, timeout: int | float | None = None) -> 
         return False
 
 
-def close_window(title_contains: str, timeout: int | float | None = None) -> bool:
+def close_window(title_contains: str | tuple[str, ...], timeout: int | float | None = None) -> bool:
     """Close the first window matching the title substring."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] close_window('%s') -> True", title_contains)
@@ -204,7 +206,7 @@ def close_window(title_contains: str, timeout: int | float | None = None) -> boo
         return False
 
 
-def is_window_open(title_contains: str) -> bool:
+def is_window_open(title_contains: str | tuple[str, ...]) -> bool:
     """Check if any window with matching title currently exists."""
     if config.DRY_RUN:
         return False

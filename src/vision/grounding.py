@@ -182,10 +182,16 @@ class VisionGrounder:
 
         best = self._select_best_candidate(target, candidates)
 
+        best_x, best_y = self._snap_to_visual_cluster(
+            screenshot,
+            best.x,
+            best.y,
+        )
+
         # Cache for stateful re-grounding
-        self._last_known_coords = (best.x, best.y)
+        self._last_known_coords = (best_x, best_y)
         self._last_region_bbox = best.region_bbox
-        return (best.x, best.y)
+        return (best_x, best_y)
 
     # -- Precise re-ground (Phase 2 → 3 only) --
 
@@ -221,17 +227,19 @@ class VisionGrounder:
                 region_bbox=bbox,
             )
             if verify and self._verify_candidate(target, screenshot, fallback):
+                cx, cy = self._snap_to_visual_cluster(screenshot, cx, cy)
                 self._last_region_bbox = bbox
                 return (cx, cy)
             raise GroundingError("Precise re-ground: low confidence or not found")
+
+        if verify and not self._verify_candidate(target, screenshot, candidate):
+            raise GroundingError("Precise re-ground: verification failed")
 
         candidate.x, candidate.y = self._snap_to_visual_cluster(
             screenshot,
             candidate.x,
             candidate.y,
         )
-        if verify and not self._verify_candidate(target, screenshot, candidate):
-            raise GroundingError("Precise re-ground: verification failed")
 
         self._last_known_coords = (candidate.x, candidate.y)
         self._last_region_bbox = bbox
@@ -282,11 +290,6 @@ class VisionGrounder:
                 )
                 continue
 
-            candidate.x, candidate.y = self._snap_to_visual_cluster(
-                screenshot,
-                candidate.x,
-                candidate.y,
-            )
             if not self._verify_candidate(target, screenshot, candidate):
                 logger.warning(
                     "Direct full-screen locate attempt %d/%d failed verification at (%d, %d)",
@@ -296,6 +299,12 @@ class VisionGrounder:
                     candidate.y,
                 )
                 continue
+
+            candidate.x, candidate.y = self._snap_to_visual_cluster(
+                screenshot,
+                candidate.x,
+                candidate.y,
+            )
 
             self._last_known_coords = (candidate.x, candidate.y)
             self._last_region_bbox = candidate.region_bbox
@@ -443,11 +452,11 @@ class VisionGrounder:
         approx_y: int,
     ) -> tuple[int, int]:
         """Snap an approximate click point to the nearest visible desktop-item cluster."""
-        max_axis_delta = 40
+        max_axis_delta = 60  # Increased to allow snapping if LLM predicts slightly above/below
         max_cluster_width = 160
         max_cluster_height = 190
         left = max(0, approx_x - 220)
-        top = max(0, approx_y - 40)
+        top = max(0, approx_y - 60)
         right = min(screenshot.width, approx_x + 220)
         bottom = min(screenshot.height, approx_y + 260)
 
@@ -516,7 +525,8 @@ class VisionGrounder:
             if score <= best_score:
                 continue
 
-            y_offset = max(12, min((abs_y2 - abs_y1) // 3, 48))
+            # Bias the click toward the center of the cluster to ensure we hit the icon body
+            y_offset = max(24, min((abs_y2 - abs_y1) // 2, 48))
             best_click = (center_x, min(abs_y2, abs_y1 + y_offset))
             best_score = score
 
@@ -531,7 +541,8 @@ class VisionGrounder:
                 best_click[1],
                 max_axis_delta,
             )
-            return (approx_x, approx_y)
+            # Fallback bias: move coordinate down slightly to hit icon body if LLM aimed too high
+            return (approx_x, min(screenshot.height, approx_y + 15))
 
         if best_click != (approx_x, approx_y):
             logger.info(
