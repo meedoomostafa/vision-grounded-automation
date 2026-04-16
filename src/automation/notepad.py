@@ -18,6 +18,9 @@ from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+TITLE_NOTEPAD = ("Notepad", "المفكرة", "Untitled")
+TITLE_SAVE = ("Save", "حفظ")
+TITLE_CONFIRM = ("Confirm", "تأكيد")
 
 def _wait_for_saved_file(
     file_path: Path,
@@ -73,7 +76,7 @@ def launch_notepad_process() -> bool:
         logger.error("Deterministic Notepad launch failed: %s", exc)
         return False
 
-    return wait_for_window("Notepad", timeout=config.WINDOW_TIMEOUT)
+    return wait_for_window(TITLE_NOTEPAD, timeout=config.WINDOW_TIMEOUT)
 
 
 def save_post(post_id: int) -> None:
@@ -95,18 +98,17 @@ def save_post(post_id: int) -> None:
     logger.info("Saving post_%d to %s", post_id, absolute_path)
 
     hotkey("ctrl", "s")
-    if not wait_for_window("Save", timeout=config.SAVE_DIALOG_TIMEOUT):
+    if not wait_for_window(TITLE_SAVE, timeout=config.SAVE_DIALOG_TIMEOUT):
         logger.warning("Save dialog not detected, trying Ctrl+Shift+S")
         hotkey("ctrl", "shift", "s")
-        if not wait_for_window("Save", timeout=config.SAVE_DIALOG_TIMEOUT):
+        if not wait_for_window(TITLE_SAVE, timeout=config.SAVE_DIALOG_TIMEOUT):     
             raise WindowNotFoundError("Save As dialog did not appear")
 
-    if not activate_window("Save", timeout=config.SAVE_DIALOG_TIMEOUT):
+    if not activate_window(TITLE_SAVE, timeout=config.SAVE_DIALOG_TIMEOUT):
         raise WindowNotFoundError("Save As dialog could not be focused")
 
-    wait_ms(150)
-    hotkey("alt", "n")
-    wait_ms(80)
+    wait_ms(400)
+                                                                                            
     hotkey("ctrl", "a")
     wait_ms(80)
     type_text(absolute_path, interval=0.01)
@@ -115,13 +117,13 @@ def save_post(post_id: int) -> None:
     press("enter")
     wait_ms(250)
 
-    if is_window_open("Confirm"):
+    if is_window_open(TITLE_CONFIRM):
         logger.debug("Overwrite confirmation detected, pressing Yes")
         hotkey("alt", "y")
         wait_ms(150)
 
-    if _wait_for_saved_file(file_path, previous_mtime_ns, previous_size):
-        if is_window_open("Save"):
+    if _wait_for_saved_file(file_path, previous_mtime_ns, previous_size):       
+        if is_window_open(TITLE_SAVE):
             logger.warning(
                 "Save dialog still open after file write; dismissing it with Escape"
             )
@@ -131,30 +133,31 @@ def save_post(post_id: int) -> None:
         return
 
     wait_ms(150)
-    if is_window_open("Save"):
+    if is_window_open(TITLE_SAVE):
         raise WindowNotFoundError("Save dialog is still open after save attempt")
 
     raise WindowNotFoundError(f"Saved file was not written: {file_path}")
 
 
+
 def close_notepad() -> None:
-    if not is_window_open("Notepad"):
+    if not is_window_open(TITLE_NOTEPAD):
         logger.debug("Notepad already closed")
         return
 
-    if not close_window("Notepad"):
+    if not close_window(TITLE_NOTEPAD):
         logger.debug("Window close failed, trying Alt+F4")
-        activate_window("Notepad")
+        activate_window(TITLE_NOTEPAD)
         wait_ms(100)
         hotkey("alt", "F4")
 
     wait_ms(200)
 
-    if is_window_open("Notepad"):
+    if is_window_open(TITLE_NOTEPAD):
         hotkey("alt", "n")
         wait_ms(150)
 
-    if is_window_open("Notepad"):
+    if is_window_open(TITLE_NOTEPAD):
         logger.warning("Notepad still open after close attempts")
     else:
         logger.debug("Notepad closed")
