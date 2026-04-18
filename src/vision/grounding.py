@@ -17,7 +17,7 @@ from src.core.exceptions import GroundingError, IconNotFoundError
 from src.core.logger import get_logger
 from src.core.retry import retry
 from src.vision import prompts
-from src.vision.annotator import annotate_detection, save_debug_crop
+from src.vision.annotator import annotate_detection, save_debug_crop, draw_coordinate_grid
 from src.vision.screenshot import crop_region
 
 logger = get_logger(__name__)
@@ -627,9 +627,12 @@ class VisionGrounder:
             y2=screenshot.height,
             confidence=1.0,
         )
+
+        annotated_screenshot = draw_coordinate_grid(screenshot)
+
         return self._locate_in_region(
             target,
-            screenshot,
+            annotated_screenshot,
             region,
             screen_size=(screenshot.width, screenshot.height),
             prompt_template=prompt,

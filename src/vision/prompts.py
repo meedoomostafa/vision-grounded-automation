@@ -37,6 +37,7 @@ Rules:
 """
 
 FULLSCREEN_LOCATION = """You are analyzing a {width}x{height} pixel Windows desktop screenshot.
+A cyan coordinate grid has been overlaid on the image to help you pinpoint exact pixels. Each grid cell is labeled with its top-left coordinate (e.g. 0,0 or 150,300).
 
 TASK: Find the EXACT center (x, y) pixel coordinates of the desktop shortcut for
 the Windows application "{target}" in this full screenshot.
@@ -47,6 +48,9 @@ VISUAL IDENTIFICATION:
   or notebook with a blue accent, and may include a shortcut arrow overlay
 - The text label below may be localized, truncated, or non-English
 - Ignore other desktop files, folders, URLs, and distractors like Notepad++ or WordPad
+
+Locate the target icon. Find the grid cell it lives in based on the cyan numbers.
+Provide the final (x, y) coordinates of the exact center of the icon *within that cell*.
 
 Return JSON:
 {{"x": int, "y": int, "confidence": float, "label": "detected text label"}}
