@@ -16,9 +16,11 @@ State management:
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event
 
 from google import genai
@@ -54,6 +56,15 @@ class Candidate:
     confidence: float
     label: str
     region_bbox: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class TemplateMatch:
+    x: int
+    y: int
+    score: float
+    width: int
+    height: int
 
 
 class VisionGrounder:
@@ -99,13 +110,18 @@ class VisionGrounder:
                     screenshot,
                     verify=True,
                 )
+                coords = self._apply_target_click_bias(target, coords, screenshot)
+                self._last_known_coords = coords
                 logger.info("Precise re-ground succeeded: (%d, %d)", *coords)
                 return coords
+            
             except GroundingError:
                 logger.warning("Precise re-ground failed, falling back to full search")
 
         direct_coords = self._verified_direct_fullscreen_locate(target, screenshot)
         if direct_coords is not None:
+            direct_coords = self._apply_target_click_bias(target, direct_coords, screenshot)
+            self._last_known_coords = direct_coords
             logger.info(
                 "Verified direct full-screen locate found '%s' at (%d, %d)",
                 target,
@@ -115,6 +131,8 @@ class VisionGrounder:
             return direct_coords
 
         coords = self._full_cascaded_search(target, screenshot)
+        coords = self._apply_target_click_bias(target, coords, screenshot)
+        self._last_known_coords = coords
         logger.info("Full cascaded search found '%s' at (%d, %d)", target, *coords)
         return coords
 
@@ -127,6 +145,390 @@ class VisionGrounder:
     @property
     def last_region_bbox(self) -> tuple[int, int, int, int] | None:
         return self._last_region_bbox
+
+    @staticmethod
+    def _is_notepad_target(target: str) -> bool:
+        lowered = target.strip().lower()
+        return "notepad" in lowered
+
+    def _apply_target_click_bias(
+        self,
+        target: str,
+        coords: tuple[int, int],
+        screenshot: Image.Image,
+    ) -> tuple[int, int]:
+        """Apply a small downward bias for known desktop-icon targets.
+
+        Notepad detections tend to land on the upper glyph edge, while launch
+        reliability improves when the click lands closer to the icon body.
+        """
+        if not self._is_notepad_target(target):
+            return coords
+
+        x, y = coords
+        y = max(0, min(screenshot.height - 1, y + 35))
+        return (x, y)
+
+    def template_fallback(
+        self,
+        target: str,
+        screenshot: Image.Image,
+        *,
+        use_botcity: bool = True,
+    ) -> tuple[int, int] | None:
+        """Tier-2 CV fallback: BotCity template, then OpenCV multi-scale matching."""
+        if not self._is_notepad_target(target):
+            return None
+
+        template_path = Path("notepad.png")
+        if not template_path.exists():
+            logger.warning("Template fallback skipped: notepad.png not found")
+            return None
+
+        coords = self._botcity_template_fallback(template_path) if use_botcity else None
+        if coords is None:
+            coords = self._opencv_template_fallback(template_path, screenshot)
+
+        if coords is not None:
+            # Template matching already returns icon-centered coordinates;
+            # keep them unchanged to avoid drifting into the label area.
+            self._last_known_coords = coords
+
+        return coords
+
+    def template_fallback_candidates(
+        self,
+        target: str,
+        screenshot: Image.Image,
+        *,
+        use_botcity: bool = True,
+        max_candidates: int = 6,
+    ) -> list[tuple[int, int]]:
+        """Return ordered template candidates for launch retries.
+
+        BotCity contributes at most one strict match, while OpenCV contributes
+        multiple high-scoring candidates across scales.
+        """
+        if not self._is_notepad_target(target):
+            return []
+
+        template_path = Path("notepad.png")
+        if not template_path.exists():
+            logger.warning("Template fallback skipped: notepad.png not found")
+            return []
+
+        candidates: list[tuple[int, int]] = []
+
+        if use_botcity:
+            botcity_coords = self._botcity_template_fallback(template_path)
+            if botcity_coords is not None:
+                candidates.append(botcity_coords)
+
+        opencv_matches = self._opencv_template_candidates(
+            template_path,
+            screenshot,
+            max_candidates=max_candidates,
+        )
+        candidates.extend((match.x, match.y) for match in opencv_matches)
+
+        unique_candidates = self._dedupe_coordinate_candidates(candidates)
+        if unique_candidates:
+            logger.info(
+                "Template fallback produced %d unique candidate(s)",
+                len(unique_candidates),
+            )
+        return unique_candidates
+
+    @staticmethod
+    def _dedupe_coordinate_candidates(
+        candidates: list[tuple[int, int]],
+        *,
+        min_distance: int = 30,
+    ) -> list[tuple[int, int]]:
+        if not candidates:
+            return []
+
+        unique: list[tuple[int, int]] = []
+        min_distance_sq = min_distance * min_distance
+        for candidate_x, candidate_y in candidates:
+            if any(
+                ((candidate_x - existing_x) ** 2) + ((candidate_y - existing_y) ** 2)
+                < min_distance_sq
+                for existing_x, existing_y in unique
+            ):
+                continue
+            unique.append((candidate_x, candidate_y))
+
+        return unique
+
+    @staticmethod
+    def _botcity_template_fallback(template_path: Path) -> tuple[int, int] | None:
+        try:
+            from src.automation.desktop import get_bot
+
+            bot = get_bot()
+            variant_paths: list[tuple[Path, float, str]] = [(template_path.resolve(), 1.0, "native")]
+            temporary_files: list[Path] = []
+
+            try:
+                with Image.open(template_path) as base_image:
+                    base_rgba = base_image.convert("RGBA")
+                    alpha = base_rgba.getchannel("A")
+                    alpha_hist = alpha.histogram()
+                    transparent_ratio = sum(alpha_hist[:250]) / max(sum(alpha_hist), 1)
+
+                    rendered_variants: list[tuple[Image.Image, str]] = [(base_rgba.convert("RGB"), "native")]
+
+                    if transparent_ratio > 0.05:
+                        logger.info(
+                            "BotCity template has transparency ratio %.2f; creating composited variants",
+                            transparent_ratio,
+                        )
+                        for background_name, color in (
+                            ("bg_dark", (16, 16, 16)),
+                            ("bg_mid", (80, 80, 80)),
+                            ("bg_light", (210, 210, 210)),
+                        ):
+                            flattened = Image.new("RGB", base_rgba.size, color)
+                            flattened.paste(base_rgba, mask=alpha)
+                            rendered_variants.append((flattened, background_name))
+
+                    scales = (0.85, 0.66, 0.50, 0.40, 0.33, 0.28, 0.24, 0.20, 0.16, 0.12, 0.10, 0.08, 0.06)
+                    seen_sizes: set[tuple[int, int, str]] = set()
+
+                    for rendered, variant_name in rendered_variants:
+                        width, height = rendered.size
+                        for scale in scales:
+                            scaled_w = int(width * scale)
+                            scaled_h = int(height * scale)
+                            if scaled_w < 12 or scaled_h < 12:
+                                continue
+                            size_key = (scaled_w, scaled_h, variant_name)
+                            if size_key in seen_sizes:
+                                continue
+                            seen_sizes.add(size_key)
+
+                            scaled = rendered.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+
+                            temp_file = tempfile.NamedTemporaryFile(
+                                prefix="botcity_notepad_",
+                                suffix=".png",
+                                delete=False,
+                            )
+                            temp_path = Path(temp_file.name)
+                            temp_file.close()
+                            scaled.save(temp_path)
+                            temporary_files.append(temp_path)
+                            variant_paths.append((temp_path, scale, variant_name))
+
+                for idx, (candidate_path, scale, variant_name) in enumerate(variant_paths):
+                    label = f"notepad_template_{idx}"
+                    bot.add_image(label, str(candidate_path))
+
+                    # Keep BotCity strict; weak matches are prone to false positives.
+                    # OpenCV fallback handles harder cases with score-based selection.
+                    for matching in (0.90, 0.86, 0.82):
+                        found = bot.find(label, matching=matching, waiting_time=1200, grayscale=True)
+                        if found:
+                            x = found.left + (found.width // 2)
+                            y = found.top + (found.height // 2)
+                            logger.info(
+                                "BotCity template matched %s at (%d, %d) [matching=%.2f scale=%.2f variant=%s]",
+                                template_path.name,
+                                x,
+                                y,
+                                matching,
+                                scale,
+                                variant_name,
+                            )
+                            return (x, y)
+
+                logger.warning("BotCity template fallback did not find notepad.png")
+                return None
+            finally:
+                for temp_path in temporary_files:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.warning("BotCity template fallback failed: %s", exc)
+            return None
+
+    @staticmethod
+    def _opencv_template_fallback(
+        template_path: Path,
+        screenshot: Image.Image,
+    ) -> tuple[int, int] | None:
+        matches = VisionGrounder._opencv_template_candidates(
+            template_path,
+            screenshot,
+            max_candidates=1,
+        )
+        if not matches:
+            return None
+
+        best = matches[0]
+        logger.info(
+            "OpenCV template matched notepad.png at (%d, %d) [score=%.2f]",
+            best.x,
+            best.y,
+            best.score,
+        )
+        return (best.x, best.y)
+
+    @staticmethod
+    def _opencv_template_candidates(
+        template_path: Path,
+        screenshot: Image.Image,
+        *,
+        max_candidates: int = 6,
+    ) -> list[TemplateMatch]:
+        try:
+            import cv2
+            import numpy as np
+        except Exception as exc:  # pragma: no cover - dependency/runtime specific
+            logger.warning("OpenCV template fallback unavailable: %s", exc)
+            return []
+
+        template = cv2.imread(str(template_path), cv2.IMREAD_UNCHANGED)
+        if template is None:
+            logger.warning("OpenCV template fallback could not load %s", template_path)
+            return []
+
+        screen_bgr = cv2.cvtColor(np.array(screenshot.convert("RGB")), cv2.COLOR_RGB2BGR)
+        screen_gray = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+
+        if template.ndim == 3 and template.shape[2] == 4:
+            template_gray = cv2.cvtColor(template[:, :, :3], cv2.COLOR_BGR2GRAY)
+            template_mask = template[:, :, 3]
+        elif template.ndim == 3:
+            template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+            template_mask = None
+        else:
+            template_gray = template
+            template_mask = None
+
+        raw_matches: list[TemplateMatch] = []
+        # Include very small scales so high-resolution web icon templates can
+        # still match tiny desktop shortcut icons.
+        scales = (0.06, 0.08, 0.10, 0.12, 0.16, 0.20, 0.25, 0.33, 0.50, 0.66, 0.75, 0.85, 1.0, 1.15, 1.30, 1.45)
+        threshold = max(0.0, min(1.0, float(getattr(config, "TEMPLATE_MIN_SCORE", 0.46))))
+        per_scale_peaks = 4
+
+        for scale in scales:
+            new_w = int(template_gray.shape[1] * scale)
+            new_h = int(template_gray.shape[0] * scale)
+            if new_w < 12 or new_h < 12:
+                continue
+            if new_w > screen_gray.shape[1] or new_h > screen_gray.shape[0]:
+                continue
+
+            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+            resized_template = cv2.resize(template_gray, (new_w, new_h), interpolation=interpolation)
+
+            if template_mask is not None:
+                resized_mask = cv2.resize(template_mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                result = cv2.matchTemplate(
+                    screen_gray,
+                    resized_template,
+                    cv2.TM_CCORR_NORMED,
+                    mask=resized_mask,
+                )
+            else:
+                result = cv2.matchTemplate(screen_gray, resized_template, cv2.TM_CCOEFF_NORMED)
+
+            result_work = result.copy()
+            for _ in range(per_scale_peaks):
+                _, max_val, _, max_loc = cv2.minMaxLoc(result_work)
+                score = float(max_val)
+                if score < threshold:
+                    break
+
+                center_x = max_loc[0] + (new_w // 2)
+                center_y = max_loc[1] + (new_h // 2)
+                raw_matches.append(
+                    TemplateMatch(
+                        x=center_x,
+                        y=center_y,
+                        score=score,
+                        width=new_w,
+                        height=new_h,
+                    )
+                )
+
+                suppress_left, suppress_top, suppress_right, suppress_bottom = (
+                    VisionGrounder._template_suppression_bounds(
+                        max_loc[0],
+                        max_loc[1],
+                        new_w,
+                        new_h,
+                        result_work.shape,
+                    )
+                )
+                result_work[suppress_top:suppress_bottom, suppress_left:suppress_right] = -1.0
+
+        if not raw_matches:
+            logger.warning(
+                "OpenCV template fallback did not find notepad.png (best_score=%.2f, threshold=%.2f)",
+                float("-inf"),
+                threshold,
+            )
+            return []
+
+        raw_matches.sort(key=lambda item: item.score, reverse=True)
+        unique_matches: list[TemplateMatch] = []
+        min_distance_sq = 30 * 30
+        for candidate in raw_matches:
+            if any(
+                ((candidate.x - existing.x) ** 2) + ((candidate.y - existing.y) ** 2)
+                < min_distance_sq
+                for existing in unique_matches
+            ):
+                continue
+            unique_matches.append(candidate)
+            if len(unique_matches) >= max(1, max_candidates):
+                break
+
+        best_match = unique_matches[0]
+
+        if config.VISUAL_DEBUG:
+            crop_half_w = max(48, min(160, best_match.width // 2))
+            crop_half_h = max(48, min(160, best_match.height // 2))
+            left = max(0, best_match.x - crop_half_w)
+            top = max(0, best_match.y - crop_half_h)
+            right = min(screenshot.width, best_match.x + crop_half_w)
+            bottom = min(screenshot.height, best_match.y + crop_half_h)
+
+            candidate = screenshot.crop((left, top, right, bottom))
+            config.DEBUG_SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+            candidate_path = config.DEBUG_SCREENSHOTS_DIR / "template_candidate_notepad.png"
+            candidate.save(candidate_path)
+            logger.info("Saved template candidate crop: %s", candidate_path)
+
+        logger.info(
+            "OpenCV template produced %d candidate(s); best=(%d, %d) score=%.2f",
+            len(unique_matches),
+            best_match.x,
+            best_match.y,
+            best_match.score,
+        )
+        return unique_matches
+
+    @staticmethod
+    def _template_suppression_bounds(
+        match_left: int,
+        match_top: int,
+        template_width: int,
+        template_height: int,
+        result_shape: tuple[int, int],
+    ) -> tuple[int, int, int, int]:
+        """Compute suppression bounds for a template match top-left coordinate."""
+        suppress_left = max(0, match_left)
+        suppress_top = max(0, match_top)
+        suppress_right = min(result_shape[1], match_left + template_width)
+        suppress_bottom = min(result_shape[0], match_top + template_height)
+        return (suppress_left, suppress_top, suppress_right, suppress_bottom)
 
     # -- Full cascaded search (Phase 1 → 2 → 3) --
 
@@ -278,8 +680,11 @@ class VisionGrounder:
         self,
         target: str,
         screenshot: Image.Image,
-        attempts: int = 3,
+        attempts: int | None = None,
     ) -> tuple[int, int] | None:
+        if attempts is None:
+            attempts = max(1, config.DIRECT_FULLSCREEN_ATTEMPTS)
+
         for attempt in range(1, attempts + 1):
             candidate = self._direct_fullscreen_locate(target, screenshot)
             if candidate is None or candidate.confidence < config.PRECISE_MIN_CONFIDENCE:
@@ -452,7 +857,7 @@ class VisionGrounder:
         approx_y: int,
     ) -> tuple[int, int]:
         """Snap an approximate click point to the nearest visible desktop-item cluster."""
-        max_axis_delta = 60  # Increased to allow snapping if LLM predicts slightly above/below
+        max_axis_delta = 40
         max_cluster_width = 160
         max_cluster_height = 190
         left = max(0, approx_x - 220)
@@ -525,7 +930,7 @@ class VisionGrounder:
             if score <= best_score:
                 continue
 
-            # Bias the click toward the center of the cluster to ensure we hit the icon body
+            # Bias toward icon body rather than label baseline.
             y_offset = max(24, min((abs_y2 - abs_y1) // 2, 48))
             best_click = (center_x, min(abs_y2, abs_y1 + y_offset))
             best_score = score
@@ -534,16 +939,14 @@ class VisionGrounder:
         dy = abs(best_click[1] - approx_y)
         if dx > max_axis_delta or dy > max_axis_delta:
             logger.debug(
-                "Rejected snap from (%d, %d) to (%d, %d): delta exceeds %dpx",
+                "Rejected snap from (%d, %d) to (%d, %d): delta exceeds %dpx",  
                 approx_x,
                 approx_y,
                 best_click[0],
                 best_click[1],
                 max_axis_delta,
             )
-            # Fallback bias: move coordinate down slightly to hit icon body if LLM aimed too high
-            return (approx_x, min(screenshot.height, approx_y + 15))
-
+            return (approx_x, approx_y)
         if best_click != (approx_x, approx_y):
             logger.info(
                 "Snapped approximate point (%d, %d) to visual cluster (%d, %d)",

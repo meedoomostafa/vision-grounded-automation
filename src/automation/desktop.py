@@ -20,9 +20,11 @@ _VK_BY_NAME = {
     "a": 0x41,
     "c": 0x43,
     "d": 0x44,
+    "f": 0x46,
     "f4": 0x73,
     "m": 0x4D,
     "n": 0x4E,
+    "r": 0x52,
     "s": 0x53,
     "v": 0x56,
     "y": 0x59,
@@ -32,6 +34,10 @@ if TYPE_CHECKING:
     from botcity.core import DesktopBot
 
 _bot: Any | None = None
+
+
+class _CursorPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
 def _desktop_bot_class():
@@ -75,7 +81,65 @@ def wait_ms(milliseconds: int) -> None:
     get_bot().wait(milliseconds)
 
 
-def double_click(x: int, y: int) -> None:
+def get_cursor_position(*, allow_bot_fallback: bool = True) -> tuple[int, int] | None:
+    """Return the current OS cursor position if available."""
+    try:
+        if sys.platform == "win32" and hasattr(ctypes, "windll"):
+            point = _CursorPoint()
+            if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                return (int(point.x), int(point.y))
+    except Exception as exc:
+        logger.debug("Unable to read cursor position via WinAPI: %s", exc)
+
+    if not allow_bot_fallback:
+        return None
+
+    try:
+        bot = get_bot()
+        return int(bot.get_last_x()), int(bot.get_last_y())
+    except Exception as exc:
+        logger.debug("Unable to read cursor position from BotCity: %s", exc)
+        return None
+
+
+def move_cursor(x: int, y: int) -> None:
+    """Move the OS cursor to absolute screen coordinates."""
+    if config.DRY_RUN:
+        logger.info("[DRY_RUN] move_cursor(%d, %d)", x, y)
+        return
+
+    try:
+        if sys.platform == "win32" and hasattr(ctypes, "windll"):
+            if ctypes.windll.user32.SetCursorPos(int(x), int(y)):
+                return
+    except Exception as exc:
+        logger.debug("Unable to move cursor via WinAPI: %s", exc)
+
+    get_bot().mouse_move(int(x), int(y))
+
+
+def _capture_cursor_position(_bot: DesktopBot) -> tuple[int, int] | None:
+    return get_cursor_position(allow_bot_fallback=False)
+
+
+def _restore_cursor_position(
+    bot: DesktopBot,
+    cursor_position: tuple[int, int] | None,
+    *,
+    reason: str,
+) -> None:
+    if cursor_position is None:
+        return
+
+    try:
+        restore_x, restore_y = cursor_position
+        move_cursor(restore_x, restore_y)
+        logger.debug("Restored cursor to (%d, %d) after %s", restore_x, restore_y, reason)
+    except Exception as exc:
+        logger.warning("Failed to restore cursor position after %s: %s", reason, exc)
+
+
+def double_click(x: int, y: int, *, restore_cursor: bool = False) -> None:
     """Double-click at screen coordinates using BotCity."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] double_click(%d, %d)", x, y)
@@ -83,21 +147,40 @@ def double_click(x: int, y: int) -> None:
 
     execution_gate.wait_if_paused()
     bot = get_bot()
+    original_cursor = _capture_cursor_position(bot) if restore_cursor else None
     logger.debug("Double-clicking at (%d, %d)", x, y)
-    bot.click_at(x, y)
-    bot.wait(80)
-    bot.click_at(x, y)
+    try:
+        bot.click_at(x, y)
+        bot.wait(80)
+        bot.click_at(x, y)
+    finally:
+        if restore_cursor:
+            _restore_cursor_position(
+                bot,
+                original_cursor,
+                reason=f"double_click({x}, {y})",
+            )
 
 
-def click(x: int, y: int) -> None:
+def click(x: int, y: int, *, restore_cursor: bool = False) -> None:
     """Single click at screen coordinates using BotCity."""
     if config.DRY_RUN:
         logger.info("[DRY_RUN] click(%d, %d)", x, y)
         return
 
     execution_gate.wait_if_paused()
+    bot = get_bot()
+    original_cursor = _capture_cursor_position(bot) if restore_cursor else None
     logger.debug("Clicking at (%d, %d)", x, y)
-    get_bot().click_at(x, y)
+    try:
+        bot.click_at(x, y)
+    finally:
+        if restore_cursor:
+            _restore_cursor_position(
+                bot,
+                original_cursor,
+                reason=f"click({x}, {y})",
+            )
 
 
 def type_text(text: str, interval: float | None = None) -> None:
@@ -142,3 +225,39 @@ def show_desktop() -> None:
     combo = ("win", "m") if sys.platform == "win32" else ("win", "d")
     hotkey(*combo)
     wait_ms(int(config.SETTLE_DELAY * 1000))
+
+
+def list_desktop_icons() -> list[tuple[str, tuple[int, int, int, int]]]:
+    """Return visible desktop icon names and bounding boxes.
+
+    Bounding box tuple is (left, top, right, bottom) in absolute screen pixels.
+    """
+    if config.DRY_RUN:
+        return []
+
+    try:
+        from pywinauto import Desktop
+
+        progman = Desktop(backend="win32").window(class_name="Progman")
+        listview = progman.child_window(class_name="SysListView32").wrapper_object()
+
+        icons: list[tuple[str, tuple[int, int, int, int]]] = []
+        item_count = int(listview.item_count())
+        for index in range(item_count):
+            item = listview.get_item(index)
+            name = str(item.text() or "").strip()
+            rect = item.rectangle()
+            icons.append((name, (rect.left, rect.top, rect.right, rect.bottom)))
+
+        return icons
+    except Exception as exc:
+        logger.debug("Desktop icon enumeration unavailable: %s", exc)
+        return []
+
+
+def desktop_icon_name_at(x: int, y: int) -> str | None:
+    """Resolve desktop icon name at a screen coordinate, if available."""
+    for icon_name, (left, top, right, bottom) in list_desktop_icons():
+        if left <= x <= right and top <= y <= bottom:
+            return icon_name or None
+    return None

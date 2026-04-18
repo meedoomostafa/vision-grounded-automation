@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 from src import config
 from src.core.exceptions import GroundingError, IconNotFoundError
 from src.core.key_manager import RoundRobinKeyManager
-from src.vision.grounding import Candidate, Region, VisionGrounder
+from src.vision.grounding import Candidate, Region, TemplateMatch, VisionGrounder
 from src.vision.screenshot import crop_region
 
 # -- crop_region tests --
@@ -137,6 +137,113 @@ def test_snap_rejection_for_high_delta():
     
     assert snapped_x == 100
     assert snapped_y == 100
+
+
+def test_template_fallback_uses_botcity_first(monkeypatch):
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (640, 360), color=(40, 40, 40))
+
+    monkeypatch.setattr("src.vision.grounding.Path.exists", lambda self: True)
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_botcity_template_fallback",
+        staticmethod(lambda _path: (300, 200)),
+    )
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_opencv_template_fallback",
+        staticmethod(lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("OpenCV should not run"))),
+    )
+
+    coords = grounder.template_fallback("Notepad", screenshot)
+
+    assert coords == (300, 200)
+
+
+def test_template_fallback_uses_opencv_when_botcity_misses(monkeypatch):
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (640, 360), color=(40, 40, 40))
+
+    monkeypatch.setattr("src.vision.grounding.Path.exists", lambda self: True)
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_botcity_template_fallback",
+        staticmethod(lambda _path: None),
+    )
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_opencv_template_fallback",
+        staticmethod(lambda _path, _screenshot: (280, 160)),
+    )
+
+    coords = grounder.template_fallback("Notepad", screenshot)
+
+    assert coords == (280, 160)
+
+
+def test_template_fallback_candidates_combines_botcity_and_opencv(monkeypatch):
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (640, 360), color=(40, 40, 40))
+
+    monkeypatch.setattr("src.vision.grounding.Path.exists", lambda self: True)
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_botcity_template_fallback",
+        staticmethod(lambda _path: (300, 200)),
+    )
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_opencv_template_candidates",
+        staticmethod(
+            lambda *_args, **_kwargs: [
+                TemplateMatch(x=300, y=200, score=0.93, width=30, height=30),
+                TemplateMatch(x=420, y=260, score=0.89, width=28, height=28),
+            ]
+        ),
+    )
+
+    coords = grounder.template_fallback_candidates("Notepad", screenshot)
+
+    assert coords == [(300, 200), (420, 260)]
+
+
+def test_template_fallback_candidates_dedupes_close_points(monkeypatch):
+    grounder = VisionGrounder()
+    screenshot = Image.new("RGB", (640, 360), color=(40, 40, 40))
+
+    monkeypatch.setattr("src.vision.grounding.Path.exists", lambda self: True)
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_botcity_template_fallback",
+        staticmethod(lambda _path: None),
+    )
+    monkeypatch.setattr(
+        VisionGrounder,
+        "_opencv_template_candidates",
+        staticmethod(
+            lambda *_args, **_kwargs: [
+                TemplateMatch(x=100, y=100, score=0.95, width=30, height=30),
+                TemplateMatch(x=114, y=110, score=0.92, width=30, height=30),
+                TemplateMatch(x=180, y=180, score=0.88, width=30, height=30),
+            ]
+        ),
+    )
+
+    coords = grounder.template_fallback_candidates("Notepad", screenshot)
+
+    assert coords == [(100, 100), (180, 180)]
+
+
+def test_template_suppression_bounds_use_match_top_left():
+    bounds = VisionGrounder._template_suppression_bounds(
+        match_left=200,
+        match_top=120,
+        template_width=80,
+        template_height=60,
+        result_shape=(400, 500),
+    )
+
+    assert bounds == (200, 120, 280, 180)
 
 
 # -- DRY_RUN mock response tests --
