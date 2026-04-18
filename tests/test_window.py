@@ -55,3 +55,23 @@ def test_is_window_open_returns_false_when_lookup_fails(monkeypatch):
     )
 
     assert window.is_window_open("Confirm") is False
+
+
+def test_terminal_notification_window_is_rejected_for_matching():
+    assert (
+        window._is_terminal_notification_window(
+            "[Terminal ... notification: command completed with exit code 0]",
+            "code.exe",
+        )
+        is True
+    )
+
+
+def test_regular_notepad_window_is_not_rejected_as_terminal_notification():
+    assert (
+        window._is_terminal_notification_window(
+            "post_1.txt - Notepad",
+            "notepad.exe",
+        )
+        is False
+    )

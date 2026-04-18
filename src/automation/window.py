@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import re
+import time
+
+import psutil
 
 from src import config
 from src.automation.control import execution_gate
-from src.automation.desktop import get_bot, wait_ms
+from src.automation.desktop import get_bot, get_cursor_position, move_cursor, wait_ms
 from src.core.logger import get_logger
 
 logger = get_logger(__name__)
 _PYWINAUTO_BACKENDS = ("uia", "win32")
+_NON_NOTEPAD_HOST_PROCESSES = {
+    "code.exe",
+    "windowsterminal.exe",
+    "powershell.exe",
+    "cmd.exe",
+    "conhost.exe",
+}
 
 try:
     from pywinauto import Desktop
@@ -53,6 +63,24 @@ def _window_object(window):
     return window
 
 
+def _is_terminal_notification_window(title: str, process_name: str) -> bool:
+    normalized_title = title.lower()
+
+    if "command completed with exit code" in normalized_title:
+        return True
+
+    if "terminal output:" in normalized_title:
+        return True
+
+    if "terminal" in normalized_title and "notification" in normalized_title:
+        return True
+
+    if process_name in _NON_NOTEPAD_HOST_PROCESSES and "terminal" in normalized_title:
+        return True
+
+    return False
+
+
 def _is_minimized(window) -> bool:
     for attr_name in ("is_minimized", "isMinimized"):
         attr = getattr(window, attr_name, None)
@@ -93,11 +121,117 @@ def _find_window_with_pywinauto(title_contains: str | tuple[str, ...], timeout_m
     timeout_seconds = timeout_ms / 1000
     last_error = None
 
-    for pywinauto_backend in _PYWINAUTO_BACKENDS:
+    raw_tokens = (
+        (title_contains.lower(),)
+        if isinstance(title_contains, str)
+        else tuple(token.lower() for token in title_contains)
+    )
+    searching_notepad_window = any(
+        token in {"notepad", "المفكرة", "untitled"}
+        for token in raw_tokens
+    )
+
+    def _process_name_for_window(window) -> str:
         try:
-            window = Desktop(backend=pywinauto_backend).window(title_re=title_re)
-            window.wait("exists enabled visible ready", timeout=timeout_seconds)
-            return window
+            pid = int(window.process_id())
+            return psutil.Process(pid).name().lower()
+        except Exception:
+            return ""
+
+    def _class_name_for_window(window) -> str:
+        try:
+            return str(window.class_name() or "").lower()
+        except Exception:
+            return ""
+
+    def _choose_candidate(candidates):
+        if not candidates:
+            return None
+
+        best_candidate = None
+        best_score = -10_000
+
+        for candidate in candidates:
+            window = _window_object(candidate)
+            title = _window_label(window).lower()
+            class_name = _class_name_for_window(window)
+            process_name = _process_name_for_window(window)
+
+            if _is_terminal_notification_window(title, process_name):
+                continue
+
+            if (
+                searching_notepad_window
+                and process_name in _NON_NOTEPAD_HOST_PROCESSES
+                and class_name != "notepad"
+            ):
+                                                                                                               
+                continue
+
+                                                                                       
+            if "hook window class" in class_name:
+                continue
+
+            try:
+                visible = bool(window.is_visible()) if hasattr(window, "is_visible") else True
+            except Exception:
+                visible = True
+
+            score = 0
+            if visible:
+                score += 5
+            if not _is_minimized(window):
+                score += 3
+
+            if process_name == "notepad.exe":
+                score += 50
+
+            if class_name == "notepad":
+                score += 40
+            elif class_name in {"#32770", "cabinetwclass"}:
+                score += 20
+            elif class_name.endswith("popupwindow"):
+                score -= 30
+
+            for token in raw_tokens:
+                if token and token in title:
+                    score += 2 if token == "untitled" else 12
+
+            if "notepad" in title or "المفكرة" in title:
+                score += 25
+
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+        return best_candidate
+
+    for pywinauto_backend in _PYWINAUTO_BACKENDS:
+        deadline = time.monotonic() + timeout_seconds
+        desktop = Desktop(backend=pywinauto_backend)
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    window = desktop.window(title_re=title_re)
+                    window.wait("exists enabled visible ready", timeout=0.25)
+                    return window
+                except Exception as exc:                                               
+                    last_error = exc
+
+                try:
+                    candidates = desktop.windows(
+                        title_re=title_re,
+                        top_level_only=True,
+                        visible_only=False,
+                        enabled_only=False,
+                    )
+                    selected = _choose_candidate(candidates)
+                    if selected is not None:
+                        return selected
+                except Exception as exc:                                               
+                    last_error = exc
+
+                time.sleep(0.1)
         except Exception as exc:                                               
             last_error = exc
 
@@ -108,6 +242,15 @@ def _find_window_with_pywinauto(title_contains: str | tuple[str, ...], timeout_m
 
 def _find_window(title_contains: str | tuple[str, ...], timeout_ms: int):
     try:
+        return _find_window_with_pywinauto(title_contains, timeout_ms)
+    except LookupError as pywinauto_error:
+        logger.debug(
+            "pywinauto window lookup failed for '%s': %s",
+            title_contains,
+            pywinauto_error,
+        )
+
+    try:
         return _find_window_with_botcity(title_contains, timeout_ms)
     except LookupError as botcity_error:
         logger.debug(
@@ -115,8 +258,7 @@ def _find_window(title_contains: str | tuple[str, ...], timeout_ms: int):
             title_contains,
             botcity_error,
         )
-
-    return _find_window_with_pywinauto(title_contains, timeout_ms)
+        raise
 
 
 def _botcity_backends():
@@ -169,10 +311,30 @@ def activate_window(title_contains: str | tuple[str, ...], timeout: int | float 
             window.restore()
             wait_ms(150)
 
+        import contextlib
+        from pywinauto import mouse
+        
+        @contextlib.contextmanager
+        def _prevent_mouse_jump():
+            original_move = mouse.move
+            mouse.move = lambda *args, **kwargs: None
+            try:
+                yield
+            finally:
+                mouse.move = original_move
+
         if hasattr(window, "set_focus"):
-            window.set_focus()
+            original_pos = get_cursor_position(allow_bot_fallback=False)
+            with _prevent_mouse_jump():
+                window.set_focus()
+            if original_pos is not None:
+                move_cursor(*original_pos)
         elif hasattr(window, "activate"):
-            window.activate()
+            original_pos = get_cursor_position(allow_bot_fallback=False)
+            with _prevent_mouse_jump():
+                window.activate()
+            if original_pos is not None:
+                move_cursor(*original_pos)
         else:
             raise AttributeError("window does not support focus activation")
 

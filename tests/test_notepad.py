@@ -13,6 +13,7 @@ def test_save_post_raises_when_file_is_not_written(monkeypatch, tmp_path):
     monkeypatch.setattr(notepad, "type_text", lambda *args, **kwargs: None)
     monkeypatch.setattr(notepad, "press", lambda *args, **kwargs: None)
     monkeypatch.setattr(notepad, "wait_ms", lambda *_: None)
+    monkeypatch.setattr(notepad, "_fill_save_path_with_pywinauto", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(notepad, "_wait_for_saved_file", lambda *args, **kwargs: False)
     monkeypatch.setattr(notepad, "wait_for_window", lambda *args, **kwargs: True)
     monkeypatch.setattr(notepad, "activate_window", lambda *args, **kwargs: True)
@@ -34,6 +35,7 @@ def test_save_post_accepts_updated_file(monkeypatch, tmp_path):
     monkeypatch.setattr(notepad, "hotkey", lambda *args, **kwargs: None)
     monkeypatch.setattr(notepad, "type_text", lambda *args, **kwargs: None)
     monkeypatch.setattr(notepad, "wait_ms", lambda *_: None)
+    monkeypatch.setattr(notepad, "_fill_save_path_with_pywinauto", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(notepad, "press", lambda *args, **kwargs: target.write_text("new content"))
     monkeypatch.setattr(notepad, "wait_for_window", lambda *args, **kwargs: True)
     monkeypatch.setattr(notepad, "activate_window", lambda *args, **kwargs: True)
@@ -60,13 +62,16 @@ def test_save_post_returns_success_when_file_is_written_even_if_dialog_lingers(
     monkeypatch.setattr(notepad, "type_text", lambda *args, **kwargs: None)
     monkeypatch.setattr(notepad, "press", lambda key: dismissed.append(key))
     monkeypatch.setattr(notepad, "wait_ms", lambda *_: None)
+    monkeypatch.setattr(notepad, "_fill_save_path_with_pywinauto", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(notepad, "wait_for_window", lambda *args, **kwargs: True)
     monkeypatch.setattr(notepad, "activate_window", lambda *args, **kwargs: True)
     monkeypatch.setattr(notepad, "_wait_for_saved_file", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         notepad,
         "is_window_open",
-        lambda title: next(save_window_states) if title == "Save" else False,
+        lambda title: next(save_window_states)
+        if (title == "Save" or (isinstance(title, tuple) and "Save" in title))
+        else False,
     )
 
     notepad.save_post(9)
@@ -86,6 +91,7 @@ def test_save_post_focuses_file_name_field_before_typing(monkeypatch, tmp_path):
     monkeypatch.setattr(notepad, "type_text", lambda text, **kwargs: typed.append(text))
     monkeypatch.setattr(notepad, "press", lambda *args, **kwargs: None)
     monkeypatch.setattr(notepad, "wait_ms", lambda *_: None)
+    monkeypatch.setattr(notepad, "_fill_save_path_with_pywinauto", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(notepad, "_wait_for_saved_file", lambda *args, **kwargs: True)
     monkeypatch.setattr(notepad, "wait_for_window", lambda *args, **kwargs: True)
     monkeypatch.setattr(notepad, "activate_window", lambda *args, **kwargs: True)
@@ -93,5 +99,5 @@ def test_save_post_focuses_file_name_field_before_typing(monkeypatch, tmp_path):
 
     notepad.save_post(10)
 
-    assert ("alt", "n") in hotkeys
+    assert ("ctrl", "a") in hotkeys
     assert typed == [str((tmp_path / "post_10.txt").resolve())]
