@@ -13,6 +13,11 @@ from src import config
 from src.automation.control import ExecutionGate
 from src.core.logger import get_logger
 
+try:
+    import pythoncom
+except Exception:  # pragma: no cover - optional dependency at runtime
+    pythoncom = None
+
 logger = get_logger(__name__)
 _USER32 = ctypes.windll.user32
 
@@ -106,53 +111,65 @@ class FocusWatcher(Thread):
             self._debounce_seconds,
             self._poll_interval,
         )
+        com_initialized = False
+        try:
+            if pythoncom is not None:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            else:
+                logger.warning("pythoncom is unavailable; FocusWatcher COM hooks may be degraded")
 
-        while not self._stop_event.wait(self._poll_interval):
-            event = self._snapshot_foreground_window()
-            if event is None:
-                continue
+            while not self._stop_event.wait(self._poll_interval):
+                event = self._snapshot_foreground_window()
+                if event is None:
+                    continue
 
-            signature = (event.hwnd, event.pid, event.title)
-            if signature == self._last_signature:
-                continue
-            self._last_signature = signature
+                signature = (event.hwnd, event.pid, event.title)
+                if signature == self._last_signature:
+                    continue
+                self._last_signature = signature
 
-            if not self._gate.is_armed:
-                continue
-            if event.pid == self._self_pid or self._is_blacklisted(event.process_name):
-                continue
-            if self._gate.is_expected_title(event.title):
-                continue
-            if not self._looks_like_popup(event):
-                logger.debug(
-                    "Ignoring unexpected non-popup focus: title=%r process=%s class=%s",
-                    event.title,
-                    event.process_name,
-                    event.class_name,
+                if not self._gate.is_armed:
+                    continue
+                if event.pid == self._self_pid or self._is_blacklisted(event.process_name):
+                    continue
+                if self._gate.is_expected_title(event.title):
+                    continue
+                if not self._looks_like_popup(event):
+                    logger.debug(
+                        "Ignoring unexpected non-popup focus: title=%r process=%s class=%s",
+                        event.title,
+                        event.process_name,
+                        event.class_name,
+                    )
+                    continue
+
+                now = time.monotonic()
+                if now - self._last_trigger_at < self._debounce_seconds:
+                    logger.info(
+                        "Debounced focus anomaly for %r (%s)",
+                        event.title,
+                        event.process_name,
+                    )
+                    continue
+
+                self._last_trigger_at = now
+                self._gate.pause(
+                    f"focus stolen by {event.process_name} ({event.title or '<untitled>'})"
                 )
-                continue
-
-            now = time.monotonic()
-            if now - self._last_trigger_at < self._debounce_seconds:
-                logger.info(
-                    "Debounced focus anomaly for %r (%s)",
-                    event.title,
-                    event.process_name,
-                )
-                continue
-
-            self._last_trigger_at = now
-            self._gate.pause(
-                f"focus stolen by {event.process_name} ({event.title or '<untitled>'})"
-            )
-            try:
-                self._on_anomaly(event)
-            except Exception:
-                logger.exception("Focus anomaly handler failed")
-            finally:
-                self._gate.resume("focus anomaly handled")
-
-        logger.info("Focus watcher stopped")
+                try:
+                    self._on_anomaly(event)
+                except Exception:
+                    logger.exception("Focus anomaly handler failed")
+                finally:
+                    self._gate.resume("focus anomaly handled")
+        finally:
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    logger.exception("Failed to uninitialize COM in FocusWatcher")
+            logger.info("Focus watcher stopped")
 
     def _snapshot_foreground_window(self) -> FocusEvent | None:
         hwnd = _USER32.GetForegroundWindow()
@@ -196,8 +213,8 @@ class FocusWatcher(Thread):
         lowered_title = event.title.lower()
         if event.class_name in DIALOG_CLASS_NAMES:
             return True
-        if event.process_name == "notepad.exe":
-            return True
+        if event.process_name == "notepad.exe" and event.class_name.lower() == "edit":
+            return False
         return any(keyword in lowered_title for keyword in POPUP_KEYWORDS)
 
 
