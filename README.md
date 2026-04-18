@@ -8,8 +8,13 @@ The project uses ScreenSeekeR-style phased grounding (region -> precise -> verif
 
 - Single-instance runtime lock is enforced through a lock file and PID metadata.
 - Posts are fetched from JSONPlaceholder with retry and an offline fallback list.
-- First post launch uses visual grounding of the Notepad desktop shortcut.
-- Remaining posts launch Notepad deterministically via notepad.exe.
+- Grounding usage is configurable via `GROUNDING_MODE`:
+  - `first`: first post uses grounding, remaining posts deterministic launch.
+  - `all`: all posts use grounding with CV/deterministic fallback chain.
+  - `none`: all posts use deterministic `notepad.exe` launch.
+- Launch behavior is configurable via `LAUNCH_STRATEGY`:
+  - `cascade`: normal order (MLLM -> template fallback -> deterministic `notepad.exe`).
+  - `template_only`: test BotCity/OpenCV template fallback only (skips MLLM and deterministic fallback).
 - Optional background FocusWatcher pauses automation when unexpected popup-like windows steal focus.
 
 ## Architecture
@@ -51,8 +56,8 @@ src/
   - `FocusWatcher` starts if `WATCHER_ENABLED=true`.
   - Automation gate is armed with expected titles: `Notepad`, `Save`, `Confirm`.
 6. Per post:
-  - Post index 0: desktop grounding path (`show_desktop` -> ground icon -> click/enter -> fallback double-click -> fallback notepad.exe).
-  - Post index 1..N: deterministic launch path (`launch_notepad_process()` only).
+  - Grounding enabled for the post: desktop grounding path (`show_desktop` -> ground icon -> click/enter -> fallback double-click -> fallback template -> fallback notepad.exe).
+  - Grounding disabled for the post: deterministic launch path (`launch_notepad_process()` only).
   - Write content, save `post_{id}.txt`, handle overwrite prompts, verify file write, then close Notepad.
 7. On failure: recover by attempting close + state reset, then continue to next post.
 8. On shutdown: disarm gate, stop watcher, print success/failure summary.
@@ -77,7 +82,7 @@ Additional safeguards:
 
 Important runtime note:
 
-- Main orchestration currently grounds only the first post (`use_grounding=index == 0`) and resets grounding state after each post. The precise re-ground path exists in `VisionGrounder` but is not currently exercised by posts 2..N in `src.main`.
+- Main orchestration selects per-post grounding via `GROUNDING_MODE` in `src.main`.
 
 ## Focus Anomaly Watcher
 
@@ -138,15 +143,43 @@ API_POSTS_LIMIT=10
 MAX_RETRIES=3
 BACKOFF_BASE=2.0
 
+# Optional legacy fallback knobs used only when the split knobs below are omitted.
+# MAX_RETRIES=3
+# BACKOFF_BASE=2.0
+
+API_MAX_RETRIES=2
+API_BACKOFF_BASE=1.5
+
+MLLM_MAX_RETRIES=2
+MLLM_BACKOFF_BASE=1.5
+
 MLLM_MIN_INTERVAL_SECONDS=12.5
 MAX_MLLM_CALLS_PER_RUN=80
 PRECISE_CROP_SIZE=400
 PRECISE_MIN_CONFIDENCE=0.55
 PRECISE_VERIFY_EVERY_N=1
+GROUNDING_CAPTURE_ATTEMPTS=1
+DIRECT_FULLSCREEN_ATTEMPTS=1
+TEMPLATE_MIN_SCORE=0.46
 ALLOW_HEURISTIC_REGION_FALLBACK=false
+
+# Grounding mode for post launches: first | all | none
+GROUNDING_MODE=first
+
+# Launch strategy: cascade | template_only
+LAUNCH_STRATEGY=cascade
+
+# For template_only validation runs, you can lower this to around 0.15-0.25
+# to force OpenCV to click the best candidate even when confidence is weak.
+# TEMPLATE_MIN_SCORE=0.15
+
+# When VISUAL_DEBUG=true, template fallback also saves:
+# screenshots/debug/template_candidate_notepad.png
+# Use that crop to replace notepad.png for desktop-specific matching.
 
 TYPING_INTERVAL=0.02
 SETTLE_DELAY=1.0
+
 WINDOW_TIMEOUT=10
 SAVE_DIALOG_TIMEOUT=5
 
@@ -162,6 +195,17 @@ uv run desktop-automation
 # or
 uv run python -m src.main
 ```
+
+### Capture Desktop-Specific Template
+
+If template fallback is not matching your icon, capture a local template directly from your screen:
+
+```bash
+uv run python tools/capture_notepad_template.py
+```
+
+Drag a rectangle around the desktop Notepad icon and press Enter.
+This saves a new `notepad.png` in the project root.
 
 Outputs are written to:
 
@@ -185,7 +229,7 @@ uv run build_exe.py
 
 | Scenario | Current handling |
 |----------|------------------|
-| API fetch failure | Retry with exponential backoff, then offline fallback posts |
+| API fetch failure | API-specific retry/backoff, then offline fallback posts |
 | Grounding failure | Retry capture/ground attempts, then post-level recovery |
 | Notepad launch failure | Escalate click/enter -> double-click -> notepad.exe fallback |
 | Save dialog missing | Retry with Ctrl+Shift+S and explicit window focus |
@@ -214,3 +258,8 @@ The suite is primarily DRY_RUN/mocked and validates:
 - Live integration tests (real Gemini + real desktop interactions) are not part of CI tests.
 - Some build scripts still reference `pyautogui` hidden imports even though runtime input control uses BotCity DesktopBot.
 - `_snap_to_visual_cluster` uses fixed local heuristics tuned to desktop icon geometry.
+
+## Recent Updates & Enhancements
+- **Mouse Hijacking Fix:** Fixed a critical bug where PyWinAuto's internal mouse.move(-10000, 500) would trigger the Windows 11 Widgets overlay. A strict context manager now prevents all unauthorized cursor jumps.
+- **Visual Cascade Enforced:** The fallback launch logic completely bypasses Win+R in favor of reading the physical icon metadata to click the actual UI icon.
+- **Detailed Documentation:** See ME.md for a comprehensive A-to-Z study guide of the architecture.
