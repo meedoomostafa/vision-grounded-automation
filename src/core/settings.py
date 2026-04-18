@@ -27,6 +27,15 @@ def _parse_float(value: str | None, default: float) -> float:
     return float(value.strip())
 
 
+def _parse_choice(value: str | None, allowed: set[str], default: str) -> str:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in allowed:
+        return normalized
+    return default
+
+
 def enable_windows_dpi_awareness() -> None:
     if os.name != "nt":
         return
@@ -96,18 +105,27 @@ class VisionSettings:
     key_manager: RoundRobinKeyManager
     max_retries: int
     backoff_base: float
+    direct_fullscreen_attempts: int
     precise_crop_size: int
+    grounding_capture_attempts: int
     mllm_min_interval_seconds: float
     max_mllm_calls_per_run: int
     precise_min_confidence: float
     precise_verify_every_n: int
     allow_heuristic_region_fallback: bool
+    template_min_score: float
 
 
 @dataclass(frozen=True)
 class AutomationSettings:
     api_base_url: str
     api_posts_limit: int
+    api_max_retries: int
+    api_backoff_base: float
+    grounding_mode: str
+    launch_strategy: str
+    launch_cursor_restore_mode: str
+    launch_trace_screenshots: bool
     typing_interval: float
     settle_delay: float
     window_timeout: int
@@ -152,13 +170,24 @@ def load_settings(
         visual_debug=_parse_bool(env_map.get("VISUAL_DEBUG"), default=False),
         log_level=(env_map.get("LOG_LEVEL", "INFO").strip() or "INFO").upper(),
     )
+    legacy_max_retries = _parse_int(env_map.get("MAX_RETRIES"), default=3)
+    legacy_backoff_base = _parse_float(env_map.get("BACKOFF_BASE"), default=2.0)
+
     vision = VisionSettings(
         model=env_map.get("GEMINI_MODEL", "gemini-1.5-flash").strip() or "gemini-1.5-flash",
         api_keys=api_keys,
         key_manager=key_manager,
-        max_retries=_parse_int(env_map.get("MAX_RETRIES"), default=3),
-        backoff_base=_parse_float(env_map.get("BACKOFF_BASE"), default=2.0),
+        max_retries=_parse_int(env_map.get("MLLM_MAX_RETRIES"), default=legacy_max_retries),
+        backoff_base=_parse_float(env_map.get("MLLM_BACKOFF_BASE"), default=legacy_backoff_base),
+        direct_fullscreen_attempts=_parse_int(
+            env_map.get("DIRECT_FULLSCREEN_ATTEMPTS"),
+            default=1,
+        ),
         precise_crop_size=_parse_int(env_map.get("PRECISE_CROP_SIZE"), default=400),
+        grounding_capture_attempts=_parse_int(
+            env_map.get("GROUNDING_CAPTURE_ATTEMPTS"),
+            default=1,
+        ),
         mllm_min_interval_seconds=_parse_float(
             env_map.get("MLLM_MIN_INTERVAL_SECONDS"),
             default=12.5,
@@ -176,11 +205,36 @@ def load_settings(
             env_map.get("ALLOW_HEURISTIC_REGION_FALLBACK"),
             default=False,
         ),
+        template_min_score=_parse_float(
+            env_map.get("TEMPLATE_MIN_SCORE"),
+            default=0.46,
+        ),
     )
     automation = AutomationSettings(
         api_base_url=env_map.get("API_BASE_URL", "https://jsonplaceholder.typicode.com").strip()
         or "https://jsonplaceholder.typicode.com",
         api_posts_limit=_parse_int(env_map.get("API_POSTS_LIMIT"), default=3),
+        api_max_retries=_parse_int(env_map.get("API_MAX_RETRIES"), default=2),
+        api_backoff_base=_parse_float(env_map.get("API_BACKOFF_BASE"), default=1.5),
+        grounding_mode=_parse_choice(
+            env_map.get("GROUNDING_MODE"),
+            {"first", "all", "none"},
+            default="first",
+        ),
+        launch_strategy=_parse_choice(
+            env_map.get("LAUNCH_STRATEGY"),
+            {"cascade", "template_only"},
+            default="cascade",
+        ),
+        launch_cursor_restore_mode=_parse_choice(
+            env_map.get("LAUNCH_CURSOR_RESTORE_MODE"),
+            {"off", "end"},
+            default="off",
+        ),
+        launch_trace_screenshots=_parse_bool(
+            env_map.get("LAUNCH_TRACE_SCREENSHOTS"),
+            default=False,
+        ),
         typing_interval=_parse_float(env_map.get("TYPING_INTERVAL"), default=0.02),
         settle_delay=_parse_float(env_map.get("SETTLE_DELAY"), default=1.0),
         window_timeout=_parse_int(env_map.get("WINDOW_TIMEOUT"), default=10),
