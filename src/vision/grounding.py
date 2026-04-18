@@ -614,28 +614,40 @@ class VisionGrounder:
         target: str,
         screenshot: Image.Image,
     ) -> Candidate | None:
+        from src.vision.annotator import generate_som_overlay
+        
+                                          
+        annotated_screenshot, elements_map = generate_som_overlay(screenshot)
+
+                       
         prompt = prompts.FULLSCREEN_LOCATION.format(
             width=screenshot.width,
             height=screenshot.height,
             target=target,
         )
+        data = self._query_mllm(prompt, annotated_screenshot)
 
-        region = Region(
-            x1=0,
-            y1=0,
-            x2=screenshot.width,
-            y2=screenshot.height,
-            confidence=1.0,
-        )
+                                            
+        try:
+            target_id = int(data.get("target_id", 0))
+            confidence = float(data.get("confidence", 0.0))
+            label = str(data.get("label", ""))
+        except (ValueError, TypeError) as exc:
+            logger.warning("Malformed SoM precise location response: %s", exc)
+            return None
 
-        annotated_screenshot = draw_coordinate_grid(screenshot)
+        if target_id == 0 or target_id not in elements_map:
+            return None
 
-        return self._locate_in_region(
-            target,
-            annotated_screenshot,
-            region,
-            screen_size=(screenshot.width, screenshot.height),
-            prompt_template=prompt,
+                                              
+        screen_x, screen_y = elements_map[target_id]
+
+        return Candidate(
+            x=screen_x,
+            y=screen_y,
+            confidence=confidence,
+            label=label,
+            region_bbox=(0, 0, screenshot.width, screenshot.height)
         )
 
     def _verified_direct_fullscreen_locate(

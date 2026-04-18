@@ -37,28 +37,23 @@ Rules:
 """
 
 FULLSCREEN_LOCATION = """You are analyzing a {width}x{height} pixel Windows desktop screenshot.
-A cyan coordinate grid has been overlaid on the image to help you pinpoint exact pixels. Each grid cell is labeled with its top-left coordinate (e.g. 0,0 or 150,300).
+A True Set-of-Mark (SoM) overlay has been applied to this image. Every distinct UI element (icons, buttons, windows) is highlighted with a red bounding box and a unique numeric ID tag.
 
-TASK: Find the EXACT center (x, y) pixel coordinates of the desktop shortcut for
-the Windows application "{target}" in this full screenshot.
+TASK: Identify the numeric ID of the bounding box that encloses the desktop shortcut for the Windows application "{target}".
 
 VISUAL IDENTIFICATION:
-- The target is the desktop shortcut for the built-in Windows "{target}" app
-- On Windows 11, the icon typically looks like a small white/blue notepad page
-  or notebook with a blue accent, and may include a shortcut arrow overlay
-- The text label below may be localized, truncated, or non-English
-- Ignore other desktop files, folders (yellow icons), URLs, and distractors like Notepad++ or WordPad. ABSOLUTELY DO NOT select a folder named "{target}". Only select the actual application icon.
+- The target is the desktop shortcut for the built-in Windows "{target}" app.
+- On Windows 11, the Notepad icon typically looks like a small white/blue notepad page with a blue accent.
+- Ignore other desktop files, folders (yellow icons), and distractors like Notepad++. ABSOLUTELY DO NOT select a folder.
 
-Locate the target icon. Find the grid cell it lives in based on the cyan numbers.
-Provide the final (x, y) coordinates of the exact center of the icon *within that cell*.
+Examine the numbered bounding boxes. Find the one that contains the "{target}" icon.
 
-Return JSON:
-{{"x": int, "y": int, "confidence": float, "label": "detected text label"}}
+Return JSON exactly in this format:
+{{"target_id": int, "confidence": float, "label": "detected text label or visual description"}}
 
 Rules:
-- Coordinates must be in the original screenshot pixel space
-- Confidence is 0.0 to 1.0
-- If the icon is not visible, return {{"x": -1, "y": -1, "confidence": 0.0, "label": "not_found"}}
+- target_id MUST be the integer number of the red bounding box enclosing the target.
+- If the icon is not visible anywhere on the screen, return {{"target_id": 0, "confidence": 0.0, "label": "not_found"}}
 """
 
 PRECISE_LOCATION = """You are viewing a cropped region of a Windows desktop screenshot.

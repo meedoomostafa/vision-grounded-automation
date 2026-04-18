@@ -99,3 +99,49 @@ def draw_coordinate_grid(image: Image.Image, cell_size: int = 150) -> Image.Imag
 
     annotated = Image.alpha_composite(annotated, overlay)
     return annotated.convert("RGB")
+import cv2
+import numpy as np
+from PIL import Image
+
+def generate_som_overlay(image: Image.Image) -> tuple[Image.Image, dict[int, tuple[int, int]]]:
+                                                               
+    open_cv_image = cv2.cvtColor(np.array(image.convert('RGB')), cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
+    
+                         
+    edges = cv2.Canny(gray, 50, 150)
+    
+                                                                           
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+    
+                     
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    boxes = []
+    width, height = image.size
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w < 12 or h < 12:                           
+            continue
+        if w > width * 0.9 or h > height * 0.9:                              
+            continue
+        boxes.append([x, y, w, h])
+        
+    elements_map = {}
+    
+                   
+    for idx, (x, y, w, h) in enumerate(boxes):
+        element_id = idx + 1
+        elements_map[element_id] = (x + w//2, y + h//2)
+        
+        cv2.rectangle(open_cv_image, (x, y), (x+w, y+h), (0, 0, 255), 2)
+        label = str(element_id)
+        (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        text_y = max(y, text_h + baseline) 
+        cv2.rectangle(open_cv_image, (x, text_y - text_h - baseline), (x + text_w, text_y), (0, 0, 255), -1)
+        cv2.putText(open_cv_image, label, (x, text_y - baseline), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    rgb_image = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb_image), elements_map
+
