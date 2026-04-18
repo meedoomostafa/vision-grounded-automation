@@ -71,3 +71,16 @@ def test_focus_watcher_detects_dialog_class_popup():
     )
 
     assert FocusWatcher._looks_like_popup(event) is True
+
+
+def test_focus_watcher_ignores_notepad_editor_focus():
+    event = FocusEvent(
+        hwnd=4,
+        pid=16,
+        title="",
+        class_name="Edit",
+        process_name="notepad.exe",
+        timestamp=3.0,
+    )
+
+    assert FocusWatcher._looks_like_popup(event) is False
