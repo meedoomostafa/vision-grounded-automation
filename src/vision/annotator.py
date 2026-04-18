@@ -92,3 +92,25 @@ def save_debug_crop(image: Image.Image, phase: str, step: int, label: str = "") 
     path = config.DEBUG_SCREENSHOTS_DIR / filename
     image.save(path)
     logger.debug("Saved debug crop: %s", path)
+
+
+def draw_coordinate_grid(image: Image.Image, cell_size: int = 150) -> Image.Image:
+    """Draws a coordinate grid with labels on the image for Set-of-Mark prompting."""
+    annotated = image.copy().convert("RGBA")
+    overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    width, height = annotated.size
+
+    # Draw vertical lines
+    for x in range(0, width, cell_size):
+        draw.line([(x, 0), (x, height)], fill=(0, 255, 255, 120), width=2)
+        for y in range(0, height, cell_size):
+            # Label each cell at the top-left corner
+            draw.text((x + 4, y + 4), f"{x},{y}", fill=(0, 255, 255, 255))
+
+    # Draw horizontal lines
+    for y in range(0, height, cell_size):
+        draw.line([(0, y), (width, y)], fill=(0, 255, 255, 120), width=2)
+
+    annotated = Image.alpha_composite(annotated, overlay)
+    return annotated.convert("RGB")
