@@ -47,7 +47,7 @@ VISUAL IDENTIFICATION:
 - On Windows 11, the icon typically looks like a small white/blue notepad page
   or notebook with a blue accent, and may include a shortcut arrow overlay
 - The text label below may be localized, truncated, or non-English
-- Ignore other desktop files, folders, URLs, and distractors like Notepad++ or WordPad
+- Ignore other desktop files, folders (yellow icons), URLs, and distractors like Notepad++ or WordPad. ABSOLUTELY DO NOT select a folder named "{target}". Only select the actual application icon.
 
 Locate the target icon. Find the grid cell it lives in based on the cyan numbers.
 Provide the final (x, y) coordinates of the exact center of the icon *within that cell*.
