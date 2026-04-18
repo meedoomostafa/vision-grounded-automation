@@ -56,7 +56,7 @@ def test_fetch_posts_skips_invalid_entries(mock_fetch):
 def test_fetch_posts_falls_back_on_api_error(mock_fetch):
     from src.core.exceptions import APIError
     mock_fetch.side_effect = APIError("connection refused")
-    posts = fetch_posts()
+    posts = fetch_posts(limit=10)
     assert len(posts) == 10
     assert posts[0]["id"] == 1
     assert "Offline" in posts[0]["title"]
@@ -65,6 +65,6 @@ def test_fetch_posts_falls_back_on_api_error(mock_fetch):
 @patch("src.automation.api_client._fetch_raw")
 def test_fetch_posts_falls_back_on_non_list_response(mock_fetch):
     mock_fetch.return_value = {"error": "unexpected format"}
-    posts = fetch_posts()
+    posts = fetch_posts(limit=10)
     assert len(posts) == 10
     assert posts[0]["id"] == 1

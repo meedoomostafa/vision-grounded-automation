@@ -20,7 +20,11 @@ _FALLBACK_POSTS = [
 ]
 
 
-@retry(max_attempts=config.MAX_RETRIES, backoff_base=config.BACKOFF_BASE, exceptions=(APIError,))
+@retry(
+    max_attempts=config.API_MAX_RETRIES,
+    backoff_base=config.API_BACKOFF_BASE,
+    exceptions=(APIError,),
+)
 def _fetch_raw(url: str) -> list[dict]:
     import socket
     import ssl
